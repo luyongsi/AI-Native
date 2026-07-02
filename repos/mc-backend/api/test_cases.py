@@ -1,18 +1,22 @@
 """
 Mission Control Backend - Test Cases API
-GET    /api/tests/{req_id}/cases          - List test cases for a requirement
-POST   /api/tests/{req_id}/cases          - Create a new test case
-GET    /api/tests/{req_id}/cases/{case_id} - Get single test case
-PUT    /api/tests/{req_id}/cases/{case_id} - Update test case
-DELETE /api/tests/{req_id}/cases/{case_id} - Delete test case
+GET    /api/tests/{req_id}/cases                    - List test cases for a requirement
+POST   /api/tests/{req_id}/cases                    - Create a new test case
+GET    /api/tests/{req_id}/cases/{case_id}          - Get single test case
+PUT    /api/tests/{req_id}/cases/{case_id}          - Update test case
+DELETE /api/tests/{req_id}/cases/{case_id}          - Delete test case
+POST   /api/tests/{req_id}/cases/{case_id}/validate - Trigger A7 validation
+POST   /api/tests/{req_id}/cases/augment            - Trigger A11 augmentation
 """
 import logging
 from typing import Optional, Any
 from datetime import datetime
 import uuid
+import json
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, BackgroundTasks
 from pydantic import BaseModel, Field
+import nats
 
 logger = logging.getLogger(__name__)
 
@@ -57,9 +61,40 @@ class TestCaseItem(BaseModel):
     status: str = "pending"
     tags: list[str] = Field(default_factory=list)
     ai_generated: bool = False
+    validation_status: str = "pending"
+    validation_errors: Optional[dict] = None
+    coverage_info: Optional[dict] = None
+    source: str = "manual"
+    augmentation_suggestions: Optional[list] = None
     last_run_at: Optional[datetime] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
+
+
+class ValidateTestCaseRequest(BaseModel):
+    case_id: str
+    test_case: Optional[TestCaseCreate] = None
+
+
+class ValidateTestCaseResponse(BaseModel):
+    case_id: str
+    req_id: str
+    validation_status: str
+    validation_errors: Optional[list] = None
+    message: str
+
+
+class AugmentTestCasesRequest(BaseModel):
+    target_coverage: float = 0.8
+    generate_count: int = 5
+
+
+class AugmentTestCasesResponse(BaseModel):
+    req_id: str
+    status: str
+    generated_count: int
+    coverage_gap: dict
+    message: str
 
 
 class TestCaseListResponse(BaseModel):
@@ -89,6 +124,11 @@ def _format_test_case(row) -> TestCaseItem:
         status=row["status"],
         tags=tags_raw,
         ai_generated=row["ai_generated"],
+        validation_status=row.get("validation_status", "pending"),
+        validation_errors=row.get("validation_errors"),
+        coverage_info=row.get("coverage_info"),
+        source=row.get("source", "manual"),
+        augmentation_suggestions=row.get("augmentation_suggestions"),
         last_run_at=row["last_run_at"],
         created_at=row["created_at"],
         updated_at=row["updated_at"],
@@ -134,7 +174,8 @@ async def list_test_cases(
             f"""
             SELECT id, req_id, title, description, steps, preconditions,
                    priority, status, tags, ai_generated, last_run_at,
-                   created_at, updated_at
+                   validation_status, validation_errors, coverage_info, source,
+                   augmentation_suggestions, created_at, updated_at
             FROM test_cases
             {where}
             ORDER BY created_at DESC
@@ -176,11 +217,12 @@ async def create_test_case(req_id: str, body: TestCaseCreate):
             """
             INSERT INTO test_cases
                 (id, req_id, title, description, steps, preconditions, priority,
-                 status, tags, ai_generated)
-            VALUES ($1, $2::uuid, $3, $4, $5::jsonb, $6, $7, 'pending', $8::jsonb, FALSE)
+                 status, tags, ai_generated, validation_status, source)
+            VALUES ($1, $2::uuid, $3, $4, $5::jsonb, $6, $7, 'pending', $8::jsonb, FALSE, 'pending', 'manual')
             RETURNING id, req_id, title, description, steps, preconditions,
                       priority, status, tags, ai_generated, last_run_at,
-                      created_at, updated_at
+                      validation_status, validation_errors, coverage_info, source,
+                      augmentation_suggestions, created_at, updated_at
             """,
             new_id,
             req_id,
@@ -206,7 +248,8 @@ async def get_test_case(req_id: str, case_id: str):
             """
             SELECT id, req_id, title, description, steps, preconditions,
                    priority, status, tags, ai_generated, last_run_at,
-                   created_at, updated_at
+                   validation_status, validation_errors, coverage_info, source,
+                   augmentation_suggestions, created_at, updated_at
             FROM test_cases
             WHERE id = $1::uuid AND req_id = $2::uuid
             """,
@@ -276,7 +319,8 @@ async def update_test_case(req_id: str, case_id: str, body: TestCaseUpdate):
             WHERE id = ${idx}::uuid AND req_id = ${idx + 1}::uuid
             RETURNING id, req_id, title, description, steps, preconditions,
                       priority, status, tags, ai_generated, last_run_at,
-                      created_at, updated_at
+                      validation_status, validation_errors, coverage_info, source,
+                      augmentation_suggestions, created_at, updated_at
             """,
             *params,
         )
@@ -306,3 +350,135 @@ async def delete_test_case(req_id: str, case_id: str):
         return {"deleted": True, "case_id": case_id}
     finally:
         await conn.close()
+
+
+# ── Validation & Augmentation Endpoints ──────────────────────────────────
+
+async def get_nats_client() -> nats.NATS:
+    """Get NATS client from main app context."""
+    from main import NATS_CLIENT
+    if NATS_CLIENT is None:
+        raise RuntimeError("NATS client not initialized")
+    return NATS_CLIENT
+
+
+@router.post("/{case_id}/validate", response_model=ValidateTestCaseResponse)
+async def validate_test_case(
+    req_id: str,
+    case_id: str,
+    body: Optional[ValidateTestCaseRequest] = None,
+    background_tasks: BackgroundTasks = BackgroundTasks(),
+):
+    """
+    Trigger A7 validation for a test case.
+    Publishes test.validate event to NATS, A7 agent processes it.
+    """
+    conn = await get_db()
+    try:
+        # Verify test case exists
+        test_case = await conn.fetchrow(
+            "SELECT id, req_id FROM test_cases WHERE id = $1::uuid AND req_id = $2::uuid",
+            case_id,
+            req_id,
+        )
+        if not test_case:
+            raise HTTPException(status_code=404, detail="Test case not found")
+
+        # Update validation_status to pending
+        await conn.execute(
+            "UPDATE test_cases SET validation_status = $1 WHERE id = $2::uuid",
+            "pending",
+            case_id,
+        )
+
+        # Publish validation event to NATS
+        async def publish_validation_event():
+            try:
+                nc = await get_nats_client()
+                event_data = {
+                    "event_type": "test.validate",
+                    "req_id": req_id,
+                    "case_id": case_id,
+                    "timestamp": datetime.utcnow().isoformat(),
+                }
+                await nc.publish(f"test.validate", json.dumps(event_data).encode())
+                logger.info(f"[A7] Validation event published: req_id={req_id}, case_id={case_id}")
+            except Exception as e:
+                logger.error(f"[A7] Failed to publish validation event: {e}")
+
+        background_tasks.add_task(publish_validation_event)
+
+        return ValidateTestCaseResponse(
+            case_id=case_id,
+            req_id=req_id,
+            validation_status="pending",
+            message="Validation queued, A7 agent processing...",
+        )
+    finally:
+        await conn.close()
+
+
+@router.post("/augment", response_model=AugmentTestCasesResponse)
+async def augment_test_cases(
+    req_id: str,
+    body: AugmentTestCasesRequest,
+    background_tasks: BackgroundTasks = BackgroundTasks(),
+):
+    """
+    Trigger A11 augmentation for a requirement.
+    Analyzes test coverage gaps and generates supplementary tests.
+    """
+    conn = await get_db()
+    try:
+        # Verify requirement exists
+        req = await conn.fetchrow(
+            "SELECT id FROM requirements WHERE id = $1::uuid",
+            req_id,
+        )
+        if not req:
+            raise HTTPException(status_code=404, detail="Requirement not found")
+
+        # Fetch existing test cases to analyze coverage
+        existing_tests = await conn.fetch(
+            "SELECT id, title, steps FROM test_cases WHERE req_id = $1::uuid",
+            req_id,
+        )
+
+        # Calculate current coverage (simplified metric)
+        coverage_gap = {
+            "current_coverage": 0.5 if existing_tests else 0.0,
+            "target_coverage": body.target_coverage,
+            "gap": body.target_coverage - (0.5 if existing_tests else 0.0),
+            "existing_test_count": len(existing_tests),
+            "suggested_new_tests": body.generate_count,
+        }
+
+        # Publish augmentation event to NATS
+        async def publish_augmentation_event():
+            try:
+                nc = await get_nats_client()
+                event_data = {
+                    "event_type": "test.augment_request",
+                    "req_id": req_id,
+                    "target_coverage": body.target_coverage,
+                    "generate_count": body.generate_count,
+                    "existing_tests": len(existing_tests),
+                    "timestamp": datetime.utcnow().isoformat(),
+                }
+                await nc.publish(f"test.augment_request", json.dumps(event_data).encode())
+                logger.info(f"[A11] Augmentation event published: req_id={req_id}")
+            except Exception as e:
+                logger.error(f"[A11] Failed to publish augmentation event: {e}")
+
+        background_tasks.add_task(publish_augmentation_event)
+
+        return AugmentTestCasesResponse(
+            req_id=req_id,
+            status="queued",
+            generated_count=0,
+            coverage_gap=coverage_gap,
+            message=f"Augmentation queued, A11 agent will generate {body.generate_count} tests...",
+        )
+    finally:
+        await conn.close()
+
