@@ -1,0 +1,23 @@
+claude_code:
+  enabled: false
+  binary: "claude"
+  args:
+    - "--bare"
+    - "-p"
+    - "--output-format"
+    - "json"
+  allowed_tools:
+    - "Read"
+    - "Edit"
+    - "Bash(npm*)"
+    - "Bash(npx*)"
+    - "Bash(git*)"
+    - "Bash(tsc*)"
+    - "Bash(eslint*)"
+    - "Grep"
+    - "Glob"
+  timeout_seconds: 600
+  max_turns: 50
+  sandbox:
+    image: "ghcr.io/our-org/agent-sandbox:ts-v3"
+    work_dir: "/workspace"

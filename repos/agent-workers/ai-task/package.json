@@ -1,0 +1,13 @@
+{
+  "name": "ai-task",
+  "version": "0.1.0",
+  "description": "AI Task CLI for Dev Agent (A9)",
+  "main": "index.js",
+  "bin": {
+    "ai-task": "./index.js"
+  },
+  "dependencies": {
+    "commander": "^12.0.0"
+  },
+  "type": "module"
+}

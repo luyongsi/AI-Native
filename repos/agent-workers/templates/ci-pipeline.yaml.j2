@@ -1,0 +1,35 @@
+# CI Pipeline Configuration
+# Generated for requirement: {{ req_id }}
+# Agent: {{ agent_id }}
+
+pipeline:
+  name: "{{ pipeline_name | default('default') }}"
+
+  build:
+    enabled: true
+    dockerfile: "{{ dockerfile | default('Dockerfile') }}"
+    image_name: "{{ image_name | default('ai-native/app') }}"
+    tag: "{{ tag | default('latest') }}"
+
+  test:
+    enabled: true
+    command: "{{ test_command | default('npm test') }}"
+    timeout_seconds: {{ test_timeout | default(300) }}
+
+  lint:
+    enabled: true
+    command: "{{ lint_command | default('npm run lint') }}"
+
+  deploy:
+    enabled: true
+    target: "{{ deploy_target | default('staging') }}"
+    url: "{{ deploy_url | default('https://staging.ai-native.internal') }}"
+    health_check_path: "{{ health_check_path | default('/health') }}"
+
+  notifications:
+    on_success: "{{ notify_success | default('pipeline.passed') }}"
+    on_failure: "{{ notify_failure | default('pipeline.failed') }}"
+
+metadata:
+  created_by: "A10-CI-Agent"
+  version: "0.1.0"

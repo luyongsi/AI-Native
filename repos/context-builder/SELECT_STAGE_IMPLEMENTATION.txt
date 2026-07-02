@@ -1,0 +1,309 @@
+"""
+Context Builder SELECT Stage Implementation - Task #24
+
+OVERVIEW
+========
+
+This implementation provides a multi-source SELECT stage for the Context Builder pipeline,
+enabling parallel querying from PostgreSQL, Neo4j, and pgvector data sources to build
+comprehensive candidate context for AI agents.
+
+IMPLEMENTATION SUMMARY
+======================
+
+1. SOURCES DIRECTORY (repos/context-builder/sources/)
+   - Created dedicated sources package for data retrieval
+
+2. DATA SOURCE CLASSES
+
+   a) PostgresSource (postgres_source.py)
+      - Queries PostgreSQL requirement history, related PRs, existing specs
+      - Async connection pooling for efficiency
+      - Three query methods:
+        * _query_requirement_history(): Gets requirement versions and history
+        * _query_related_prs(): Retrieves associated pull requests
+        * _query_existing_specs(): Fetches existing specifications
+      - Error handling with graceful fallback
+      - Relevance scores: 0.75-0.85
+
+   b) Neo4jSource (neo4j_source.py)
+      - Queries Neo4j dependency topology and service relationships
+      - Three query methods:
+        * _query_upstream_dependencies(): Services this depends on
+        * _query_downstream_dependencies(): Services depending on this
+        * _query_service_calls(): Direct service-to-service calls
+      - Graph traversal up to 3 hops depth
+      - Relevance scores: 0.65-0.72
+
+   c) VectorSource (vector_source.py)
+      - Semantic search via pgvector embeddings
+      - Three query methods:
+        * _query_similar_requirements(): Find semantically similar requirements
+        * _query_historical_knowledge(): Retrieve design decisions, patterns
+        * _query_design_patterns(): Related architectural patterns
+      - Dynamic filtering based on similarity threshold
+      - Relevance scores: 0.55-0.75
+
+3. MULTI-SOURCE SELECTOR (multi_source_selector.py)
+
+   Key Components:
+
+   a) SelectMetrics Class
+      - Prometheus-style metrics collection
+      - Tracks:
+        * context_builder_select_candidates_total
+        * context_builder_select_candidates_deduped
+        * context_builder_select_candidates_final
+        * context_builder_select_duration_ms
+        * source_counts (per source)
+      - Export to dict for monitoring
+
+   b) MultiSourceSelector Class
+      - Orchestrates parallel queries from all sources
+      - Methods:
+        * select_async(): Main async orchestration method
+        * _merge_and_deduplicate(): Intelligent candidate merging
+        * _build_items(): Token-aware ContextItem construction
+        * get_metrics(): Retrieve performance metrics
+
+      Deduplication Strategy:
+      - Groups candidates by (source_id, source) tuple
+      - Keeps highest relevance score
+      - Merges metadata and tags duplicates
+      - Sorts by relevance descending
+
+      Token Accounting:
+      - Estimates tokens: ~3 chars per token
+      - Respects max_tokens budget
+      - Tracks discarded candidates
+
+4. TEST SUITE (test_select_stage.py)
+   - Comprehensive unit tests for all components
+   - Test classes:
+     * TestSelectMetrics: Metrics collection and export
+     * TestMultiSourceSelector: Selector logic and integration
+   - Tests cover:
+     * Initialization and configuration
+     * Deduplication and merging logic
+     * Relevance sorting
+     * Token accounting and limits
+     * Async integration with mocked sources
+     * Performance benchmarking (<500ms requirement)
+
+DATA FLOW
+=========
+
+┌─────────────────────────────────────────────┐
+│  build_context() called (pipeline.py)       │
+│  target_agent, req_id, max_tokens, etc.     │
+└────────────────┬────────────────────────────┘
+                 │
+                 ▼
+     ┌─────────────────────────────┐
+     │  MultiSourceSelector.       │
+     │  select_async()             │
+     └────┬────────────┬────────┬──┘
+          │            │        │
+     ┌────▼┐      ┌────▼┐  ┌───▼───┐
+     │POST-│      │VEC- │  │NEO4J- │
+     │GRES │      │TOR  │  │SOURCE │
+     └────┬┘      └────┬┘  └───┬───┘
+          │            │       │
+          └────────┬───┴───┬───┘
+                   ▼       ▼
+          ┌──────────────────────┐
+          │ Merge & Deduplicate  │
+          │ Group by source_id   │
+          │ Keep max relevance   │
+          │ Sort by relevance    │
+          └──────────┬───────────┘
+                     │
+                     ▼
+          ┌──────────────────────┐
+          │ Build ContextItems   │
+          │ Token accounting     │
+          │ Respect max_tokens   │
+          │ Attach metadata      │
+          └──────────┬───────────┘
+                     │
+                     ▼
+          ┌──────────────────────┐
+          │  SelectResult        │
+          │  - items             │
+          │  - tokens_used       │
+          │  - discarded         │
+          └──────────┬───────────┘
+                     │
+                     ▼
+         ┌────────────────────────┐
+         │ Order Stage (next)     │
+         │ Further refinement     │
+         └────────────────────────┘
+
+CONFIGURATION
+=============
+
+PostgreSQL Config:
+{
+    "host": "localhost",
+    "port": 5432,
+    "database": "ai_native",
+    "user": "ai_native",
+    "password": "ai_native_dev"
+}
+
+Neo4j Config (optional):
+{
+    "uri": "neo4j://localhost:7687",
+    "username": "neo4j",
+    "password": "password"
+}
+
+Both configs support environment variable override.
+
+PERFORMANCE CHARACTERISTICS
+============================
+
+- SELECT stage completion: < 500ms (with mock data)
+- Sources queried in parallel (asyncio)
+- Connection pooling: min=1, max=5 per source
+- Token estimation: ~3 characters per token
+- Deduplication: O(n) with dict lookup
+
+Error Handling:
+- Graceful degradation per source
+- One source failure doesn't block others
+- Empty list returned on individual source errors
+- Detailed logging for debugging
+
+ACCEPTANCE CRITERIA STATUS
+==========================
+
+[✓] Three data source classes implemented
+    - PostgresSource: 8.1 KB, 3 query methods
+    - Neo4jSource: 8.3 KB, 3 query methods
+    - VectorSource: 11.0 KB, 3 query methods
+
+[✓] Candidates queried from all sources
+    - PostgreSQL: requirement history, PRs, specs
+    - Neo4j: upstream/downstream deps, service calls
+    - pgvector: similar reqs, historical knowledge, patterns
+
+[✓] Candidate merging logic implemented
+    - Deduplication by (source_id, source)
+    - Highest relevance score retained
+    - Metadata merged, tags applied
+    - Sorted by relevance descending
+
+[✓] Prometheus metrics implemented
+    - context_builder_select_candidates_total
+    - context_builder_select_candidates_deduped
+    - context_builder_select_candidates_final
+    - context_builder_select_duration_ms
+    - source_counts per source
+
+[✓] Error handling included
+    - Try-catch blocks around all DB operations
+    - Async exception handling
+    - Graceful fallback on source errors
+    - Comprehensive logging
+
+[✓] Code follows project style
+    - Async/await patterns
+    - Type hints throughout
+    - Docstrings on all classes/methods
+    - Consistent naming conventions
+
+USAGE EXAMPLE
+=============
+
+from multi_source_selector import MultiSourceSelector
+from embedder import get_embedder
+import asyncio
+
+async def main():
+    db_config = {
+        'host': 'localhost',
+        'database': 'ai_native',
+        'user': 'ai_native',
+        'password': 'ai_native_dev',
+    }
+
+    neo4j_config = {
+        'uri': 'neo4j://localhost:7687',
+        'username': 'neo4j',
+        'password': 'password',
+    }
+
+    embedder = get_embedder()
+    selector = MultiSourceSelector(db_config, embedder, neo4j_config)
+
+    result = await selector.select_async(
+        target_agent='A9',
+        req_id='req-001',
+        max_tokens=8000,
+        query_text='Implement REST API authentication'
+    )
+
+    print(f"Selected {len(result.items)} items")
+    print(f"Tokens used: {result.tokens_used}")
+    print(f"Metrics: {selector.get_metrics()}")
+
+    await selector.close()
+
+asyncio.run(main())
+
+INTEGRATION WITH PIPELINE
+==========================
+
+The MultiSourceSelector.select_async() method is designed to replace or enhance
+the current ContextSelector.select() method in pipeline.py.
+
+Current pipeline flow:
+  sanitize_check -> SELECT -> ORDER -> COMPRESS -> ISOLATE -> SANITIZE_record
+
+Enhanced flow with multi-source SELECT:
+  1. PostgreSQL queries (requirement history, PRs, specs)
+  2. Neo4j queries (dependency topology)
+  3. pgvector queries (semantic similarity)
+  4. Merge & deduplicate all candidates
+  5. Build ContextItems with token accounting
+  6. Return SelectResult to ORDER stage
+
+Future enhancements:
+  - Caching for frequently accessed sources
+  - Configurable source weights
+  - Adaptive relevance scoring based on agent type
+  - Query result compression
+  - Source health monitoring
+
+FILES CREATED
+=============
+
+/repos/context-builder/sources/__init__.py
+/repos/context-builder/sources/postgres_source.py
+/repos/context-builder/sources/neo4j_source.py
+/repos/context-builder/sources/vector_source.py
+/repos/context-builder/multi_source_selector.py
+/repos/context-builder/test_select_stage.py
+
+Total: 6 files, ~54 KB of implementation code
+
+TESTING
+=======
+
+Run tests with:
+  python test_select_stage.py
+
+The test suite includes:
+- Unit tests for metrics collection
+- Unit tests for selector logic (dedup, merging, tokens)
+- Async integration tests with mocked sources
+- Performance benchmarking tests
+- Token accounting validation
+
+All tests are self-contained and don't require live databases.
+"""
+
+# This is documentation - not executable
+pass

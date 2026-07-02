@@ -1,0 +1,146 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: ai-postgres
+    environment:
+      POSTGRES_DB: ai_native
+      POSTGRES_USER: ai_native
+      POSTGRES_PASSWORD: ai_native_dev
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./init-db.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ai_native"]
+      interval: 5s
+    networks:
+      - ai-network
+
+  nats:
+    image: nats:2.10-alpine
+    container_name: ai-nats
+    command: "-js -m 8222"
+    ports:
+      - "4222:4222"
+      - "8222:8222"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O-", "http://localhost:8222/healthz"]
+      interval: 5s
+    networks:
+      - ai-network
+
+  temporal:
+    image: temporalio/auto-setup:1.24
+    container_name: ai-temporal
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DB: postgres12
+      DB_PORT: 5432
+      POSTGRES_USER: ai_native
+      POSTGRES_PWD: ai_native_dev
+      POSTGRES_SEEDS: postgres
+      SKIP_DEFAULT_NAMESPACE_CREATION: "false"
+      DEFAULT_NAMESPACE: ai-native
+      DBNAME: ai_native
+    ports:
+      - "7233:7233"
+    networks:
+      - ai-network
+
+  temporal-web:
+    image: temporalio/web:latest
+    container_name: ai-temporal-web
+    depends_on:
+      - temporal
+    environment:
+      TEMPORAL_GRPC_ENDPOINT: 172.31.0.5:7233
+      TEMPORAL_PERMIT_WRITE_API: "true"
+    ports:
+      - "8088:8088"
+    networks:
+      - ai-network
+
+  redis:
+    image: redis:7-alpine
+    container_name: ai-redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+    networks:
+      - ai-network
+
+  neo4j:
+    image: neo4j:5-community
+    container_name: ai-neo4j
+    environment:
+      NEO4J_AUTH: neo4j/password123
+      NEO4J_PLUGINS: '["apoc"]'
+    ports:
+      - "7474:7474"
+      - "7687:7687"
+    volumes:
+      - neo4jdata:/data
+      - ./neo4j/import:/var/lib/neo4j/import
+    networks:
+      - ai-network
+
+  # ---- Observability Stack ----
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: ai-prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+      - '--web.console.templates=/usr/share/prometheus/consoles'
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - ai-network
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: ai-grafana
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: admin
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./grafana/datasources:/etc/grafana/provisioning/datasources
+      - grafana_data:/var/lib/grafana
+    networks:
+      - ai-network
+
+  loki:
+    image: grafana/loki:latest
+    container_name: ai-loki
+    ports:
+      - "3100:3100"
+    volumes:
+      - loki_data:/loki
+    networks:
+      - ai-network
+
+volumes:
+  pgdata:
+  neo4jdata:
+  prometheus_data:
+  grafana_data:
+  loki_data:
+
+networks:
+  ai-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.31.0.0/24

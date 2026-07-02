@@ -1,0 +1,92 @@
+groups:
+  - name: ai_native_alerts
+    rules:
+      - alert: HighAgentFailureRate
+        expr: rate(agent_executions_total{status="failed"}[5m]) > 0.1
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Agent failure rate > 10%"
+          description: "Agent {{ $labels.agent_id }} failure rate is {{ $value | humanize }}"
+
+      - alert: AgentStuck
+        expr: agent_executions_total{status="running"} > 0 and time() - agent_executions_total{status="running"} > 1800
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Agent may be stuck"
+          description: "Agent {{ $labels.agent_id }} has been running for >30min"
+
+      - alert: LoopTripped
+        expr: rate(loop_tripped_total[10m]) > 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Circuit breaker tripped"
+          description: "Loop tripped for scope {{ $labels.scope }}"
+
+      - alert: GateSLAOverdue
+        expr: approvals_by_status{status="overdue"} > 0
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Gate SLA overdue"
+          description: "{{ $value }} gate(s) are overdue"
+
+      - alert: HighWIP
+        expr: requirements_by_status{status="developing"} > 10
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "WIP limit exceeded"
+          description: "{{ $value }} requirements in developing status"
+
+      - alert: ZeroThroughput
+        expr: rate(requirements_created_total[1h]) == 0 and rate(agent_executions_total[1h]) > 0
+        for: 1h
+        labels:
+          severity: info
+        annotations:
+          summary: "No new requirements in 1h"
+          description: "Pipeline may be blocked"
+
+      - alert: WebSocketConnectionDrop
+        expr: delta(ws_connections_active[5m]) < -10
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "WebSocket connections dropping"
+          description: "{{ $value }} connections dropped in 5min"
+
+      - alert: HighEventBusLatency
+        expr: rate(eventbus_messages_total[5m]) < 0.01 and agent_executions_total > 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Low event bus throughput"
+          description: "Event bus message rate is very low"
+
+      - alert: DatabaseConnectionPoolExhausted
+        expr: requirements_by_status > 0 unless agent_executions_total{status="running"} > 0
+        for: 30m
+        labels:
+          severity: critical
+        annotations:
+          summary: "No agent activity with pending work"
+          description: "System may be stuck"
+
+      - alert: TestFailureSpike
+        expr: rate(eventbus_messages_total{event_type="test.failed"}[10m]) > 0.5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Test failure rate increasing"
+          description: "{{ $value }} test failures per second"
