@@ -1,0 +1,190 @@
+rules:
+  - id: hardcoded-api-key
+    pattern-either:
+      - pattern: |
+          api_key = "..."
+      - pattern: |
+          API_KEY = "..."
+      - pattern: |
+          apiKey = "..."
+    message: Hardcoded API key detected
+    severity: ERROR
+    languages: [python, javascript, typescript]
+    metadata:
+      cwe: CWE-798
+      category: security
+      owasp: A2:2021 - Cryptographic Failures
+
+  - id: sql-injection-risk
+    pattern-either:
+      - pattern: |
+          $DB.execute($SQL + ...)
+      - pattern: |
+          cursor.execute(f"...")
+      - pattern: |
+          db.query(f"...")
+    message: Potential SQL injection vulnerability
+    severity: ERROR
+    languages: [python]
+    metadata:
+      cwe: CWE-89
+      category: security
+      owasp: A03:2021 - Injection
+
+  - id: command-injection
+    pattern-either:
+      - pattern: |
+          os.system($VAR)
+      - pattern: |
+          subprocess.call($VAR, shell=True)
+      - pattern: |
+          exec($VAR)
+    message: Command injection risk detected
+    severity: ERROR
+    languages: [python]
+    metadata:
+      cwe: CWE-78
+      category: security
+      owasp: A03:2021 - Injection
+
+  - id: xss-vulnerability
+    pattern-either:
+      - pattern: |
+          document.innerHTML = $VAR
+      - pattern: |
+          eval($VAR)
+      - pattern: |
+          innerHTML = $VAR
+    message: XSS vulnerability detected
+    severity: ERROR
+    languages: [javascript, typescript]
+    metadata:
+      cwe: CWE-79
+      category: security
+      owasp: A03:2021 - Injection
+
+  - id: path-traversal
+    pattern-either:
+      - pattern: |
+          open($VAR)
+      - pattern: |
+          read_file($VAR)
+      - pattern: |
+          readFile($VAR)
+    message: Path traversal vulnerability - validate input paths
+    severity: WARNING
+    languages: [python, javascript, typescript]
+    metadata:
+      cwe: CWE-22
+      category: security
+      owasp: A01:2021 - Broken Access Control
+
+  - id: insecure-deserialization
+    pattern-either:
+      - pattern: |
+          pickle.loads($VAR)
+      - pattern: |
+          yaml.load($VAR)
+      - pattern: |
+          json.loads($VAR)
+    message: Insecure deserialization detected
+    severity: WARNING
+    languages: [python]
+    metadata:
+      cwe: CWE-502
+      category: security
+      owasp: A08:2021 - Software and Data Integrity Failures
+
+  - id: weak-cryptography
+    pattern-either:
+      - pattern: |
+          hashlib.md5(...)
+      - pattern: |
+          hashlib.sha1(...)
+      - pattern: |
+          DES.new(...)
+      - pattern: |
+          AES.new($KEY, $MODE)
+    message: Weak or outdated cryptographic algorithm used
+    severity: WARNING
+    languages: [python]
+    metadata:
+      cwe: CWE-327
+      category: security
+      owasp: A02:2021 - Cryptographic Failures
+
+  - id: hardcoded-credentials
+    pattern-either:
+      - pattern: |
+          password = "..."
+      - pattern: |
+          PASSWORD = "..."
+      - pattern: |
+          secret = "..."
+      - pattern: |
+          token = "..."
+    message: Hardcoded credentials detected
+    severity: ERROR
+    languages: [python, javascript, typescript]
+    metadata:
+      cwe: CWE-798
+      category: security
+      owasp: A2:2021 - Cryptographic Failures
+
+  - id: ssrf-vulnerability
+    pattern-either:
+      - pattern: |
+          requests.get($VAR)
+      - pattern: |
+          urllib.urlopen($VAR)
+      - pattern: |
+          fetch($VAR)
+    message: SSRF vulnerability - validate and restrict URLs
+    severity: WARNING
+    languages: [python, javascript, typescript]
+    metadata:
+      cwe: CWE-918
+      category: security
+      owasp: A10:2021 - Server-Side Request Forgery
+
+  - id: missing-auth-check
+    pattern: |
+      @app.route(...)
+      def $FUNC(...):
+    message: API endpoint missing authentication check
+    severity: WARNING
+    languages: [python]
+    metadata:
+      cwe: CWE-306
+      category: security
+      owasp: A01:2021 - Broken Access Control
+
+  - id: insecure-random
+    pattern-either:
+      - pattern: |
+          random.randint(...)
+      - pattern: |
+          Math.random()
+      - pattern: |
+          random.choice(...)
+    message: Insecure random number generation for security purposes
+    severity: WARNING
+    languages: [python, javascript, typescript]
+    metadata:
+      cwe: CWE-338
+      category: security
+      owasp: A02:2021 - Cryptographic Failures
+
+  - id: unvalidated-redirect
+    pattern-either:
+      - pattern: |
+          redirect($VAR)
+      - pattern: |
+          window.location = $VAR
+    message: Unvalidated redirect - validate redirect targets
+    severity: WARNING
+    languages: [python, javascript, typescript]
+    metadata:
+      cwe: CWE-601
+      category: security
+      owasp: A01:2021 - Broken Access Control
