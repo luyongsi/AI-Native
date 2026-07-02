@@ -1,0 +1,43 @@
+[MASTER]
+# Pylint configuration for Inner Auditor
+ignore=tests,__pycache__,.git
+jobs=1
+persistent=no
+
+[MESSAGES CONTROL]
+disable=
+    missing-module-docstring,
+    too-few-public-methods,
+    R0903,
+    C0111,
+enable=
+    E,
+    W,
+    F
+
+[FORMAT]
+max-line-length=100
+indent-string='  '
+
+[BASIC]
+good-names=i,j,k,ex,Run,_
+argument-naming-style=snake_case
+function-naming-style=snake_case
+variable-naming-style=snake_case
+
+[DESIGN]
+max-arguments=5
+max-attributes=7
+max-locals=15
+
+[VARIABLES]
+dummy-variables-rgx=_+$|^unused_
+
+[LOGGING]
+logging-format-style=new
+
+[SIMILARITIES]
+min-similarity-lines=5
+ignore-comments=yes
+ignore-docstrings=yes
+ignore-imports=yes

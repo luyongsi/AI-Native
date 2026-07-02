@@ -1,0 +1,65 @@
+rules:
+  # Security Rules
+  - id: sql-injection-via-string-formatting
+    pattern-either:
+      - pattern: $DB.execute(..., f"...{...}...")
+      - pattern: $DB.execute(..., "..." % ...)
+      - pattern: execute(..., f"...{...}...")
+    message: "Potential SQL injection vulnerability via string formatting"
+    languages: [python]
+    severity: CRITICAL
+
+  - id: xss-via-innerhtml
+    pattern-either:
+      - pattern: $EL.innerHTML = $VAR + ...
+      - pattern: $EL.innerHTML = ... + $VAR
+    message: "Potential XSS vulnerability via innerHTML"
+    languages: [javascript, typescript]
+    severity: HIGH
+
+  - id: hardcoded-credentials
+    pattern-either:
+      - pattern: |
+          $KEY = "..."
+          where $KEY in ["api_key", "apiKey", "password", "secret", "token"]
+            and pattern-length($CONST) >= 10
+    message: "Hardcoded credentials detected"
+    languages: [python, javascript, typescript]
+    severity: CRITICAL
+
+  - id: insecure-deserialization-pickle
+    pattern: pickle.load(...)
+    message: "Unsafe deserialization with pickle"
+    languages: [python]
+    severity: CRITICAL
+
+  - id: command-injection
+    pattern-either:
+      - pattern: os.system(f"...")
+      - pattern: subprocess.call(..., shell=True)
+    message: "Potential command injection vulnerability"
+    languages: [python]
+    severity: CRITICAL
+
+  - id: weak-cryptography-md5
+    pattern: hashlib.md5(...)
+    message: "MD5 is cryptographically broken"
+    languages: [python]
+    severity: HIGH
+
+  # Best Practices
+  - id: print-debugging
+    pattern: print(...)
+    message: "Debug print statement left in code"
+    languages: [python, javascript]
+    severity: LOW
+
+  - id: empty-except
+    pattern: |
+      try:
+          ...
+      except:
+          pass
+    message: "Bare except clause caught too broad exception"
+    languages: [python]
+    severity: MEDIUM
