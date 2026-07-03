@@ -240,8 +240,9 @@ class APISchemaGenerator:
 
         logger.info(f"Generating OpenAPI 3.1 spec for domain={domain}, title={title}")
 
-        # Build prompt with few-shot examples
-        prompt = self._build_prompt(requirement_text, title, domain)
+        # Build prompt with few-shot examples (and rework feedback if present)
+        rework_feedback = context.get("rework_feedback", "")
+        prompt = self._build_prompt(requirement_text, title, domain, rework_feedback)
 
         # Call LLM
         llm_response = await self._call_llm(prompt)
@@ -306,9 +307,18 @@ class APISchemaGenerator:
         validation_log.append(f"✗ Failed validation after {max_retries + 1} attempts")
         return False, schema, validation_log
 
-    def _build_prompt(self, requirement_text: str, title: str, domain: str) -> str:
+    def _build_prompt(self, requirement_text: str, title: str, domain: str, rework_feedback: str = "") -> str:
         """Build the LLM prompt with few-shot examples."""
         fewshot_text = self._format_fewshot_examples()
+
+        feedback_section = ""
+        if rework_feedback:
+            feedback_section = f"""
+
+PREVIOUS REVIEW FEEDBACK (must address critical and major issues):
+{rework_feedback}
+---
+"""
 
         prompt = f"""You are an expert API architect. Generate a complete, valid OpenAPI 3.1 specification from the following requirement.
 
@@ -316,7 +326,7 @@ REQUIREMENT:
 Title: {title}
 Domain: {domain}
 Description: {requirement_text}
-
+{feedback_section}
 EXAMPLES OF GOOD API DESIGNS:
 {fewshot_text}
 

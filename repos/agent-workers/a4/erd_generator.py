@@ -213,9 +213,10 @@ class ERDGenerator:
             f"existing_tables={len(existing_tables)}"
         )
 
-        # Build prompt with few-shot examples
+        # Build prompt with few-shot examples (and rework feedback if present)
+        rework_feedback = context.get("rework_feedback", "")
         prompt = self._build_prompt(
-            requirement_text, title, domain, existing_tables
+            requirement_text, title, domain, existing_tables, rework_feedback
         )
 
         # Call LLM
@@ -325,6 +326,7 @@ class ERDGenerator:
         title: str,
         domain: str,
         existing_tables: List[str],
+        rework_feedback: str = "",
     ) -> str:
         """Build the LLM prompt with few-shot examples."""
         fewshot_text = self._format_fewshot_examples()
@@ -336,13 +338,22 @@ class ERDGenerator:
             else ""
         )
 
+        feedback_section = ""
+        if rework_feedback:
+            feedback_section = f"""
+
+PREVIOUS REVIEW FEEDBACK (must address critical and major issues):
+{rework_feedback}
+---
+"""
+
         prompt = f"""You are an expert database architect. Generate a complete ERD and PostgreSQL DDL from the following requirement.
 
 REQUIREMENT:
 Title: {title}
 Domain: {domain}
 Description: {requirement_text}
-
+{feedback_section}
 {existing_tables_text}
 
 EXAMPLES OF GOOD DATABASE DESIGNS:

@@ -186,6 +186,13 @@ class A4SpecWriter(BaseAgentWorker):
 
         requirement_text = draft.get("summary", draft.get("title", ""))
 
+        # Check for rework feedback from A5 review
+        rework_info = ""
+        context_str = context_package.get("context", "")
+        if "[REWORK_FEEDBACK]" in context_str:
+            rework_info = context_str.split("[REWORK_FEEDBACK]")[1][:2000]
+            logger.info(f"[A4] Detected rework feedback, will pass to sub-modules")
+
         # Detect existing tables for incremental schema
         existing_tables = await self._detect_existing_tables(self._db_pool)
 
@@ -198,6 +205,7 @@ class A4SpecWriter(BaseAgentWorker):
                 "acceptance_criteria": draft.get("acceptance_criteria", []),
                 "req_id": req_id,
                 "workflow_id": context_package.get("workflow_id", ""),
+                "rework_feedback": rework_info,
             },
             max_retries=3,
         )
@@ -209,6 +217,7 @@ class A4SpecWriter(BaseAgentWorker):
                 "domain": domain,
                 "req_id": req_id,
                 "workflow_id": context_package.get("workflow_id", ""),
+                "rework_feedback": rework_info,
             },
             existing_tables=existing_tables,
             max_retries=3,
@@ -217,9 +226,12 @@ class A4SpecWriter(BaseAgentWorker):
         # Wait for both tasks to complete
         api_schema_result, erd_result = await asyncio.gather(api_schema_task, erd_task)
 
-        # Save both to database
+        # Save to both locations:
+        #   1) api_schemas / erd_designs 独立表（版本化存储）
+        #   2) requirements.spec JSONB 字段（A5 从 DB 读取此字段）
         await self._save_api_schema(req_id, api_schema_result)
         await self._save_erd_design(req_id, erd_result)
+        await self._write_spec_to_db(req_id, api_schema_result, erd_result)
 
         # Report as artifacts
         await self.report_artifact(req_id, "openapi_spec", api_schema_result.get("schema", {}))

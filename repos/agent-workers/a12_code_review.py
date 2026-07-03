@@ -26,6 +26,7 @@ class CodeReviewAgent(BaseAgentWorker):
     def __init__(self, nats_url: str = "nats://localhost:4222"):
         super().__init__(AGENT_ID, AGENT_TYPE, nats_url)
         self.running_tasks: set = set()
+        self._execute_lock = asyncio.Lock()  # Prevent concurrent execute() calls
 
     async def init(self):
         await super().init()
@@ -54,6 +55,11 @@ class CodeReviewAgent(BaseAgentWorker):
             logger.error(f"[A12] Review failed: {e}")
 
     async def execute(self, req_id: str, context_package: dict) -> dict:
+        """Code review with mutex to prevent concurrent overlapping calls."""
+        async with self._execute_lock:
+            return await self._execute_impl(req_id, context_package)
+
+    async def _execute_impl(self, req_id: str, context_package: dict) -> dict:
         test_result = context_package
         code_diff = test_result.get("code_diff", test_result.get("payload", {}))
         changes = code_diff.get("changes", []) if isinstance(code_diff, dict) else []
@@ -86,6 +92,7 @@ class CodeReviewAgent(BaseAgentWorker):
             task_type="code_review",
             max_tokens=2000,
             req_id=req_id,
+            workflow_id=context_package.get("workflow_id", ""),
             temperature=0.1,
         )
 

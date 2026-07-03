@@ -39,6 +39,13 @@ class UIGeneratorAgent(BaseAgentWorker):
 
         await self.report_status(req_id, "running", "Phase 1: 分析需求类型")
 
+        # Check for rework feedback from A5 review
+        rework_info = ""
+        context_str = context_package.get("context", "")
+        if "[REWORK_FEEDBACK]" in context_str:
+            rework_info = "\n\n【上一轮评审反馈 - 请重点修复以下问题】\n" + context_str.split("[REWORK_FEEDBACK]")[1][:2000]
+            logger.info(f"[A3] Detected rework feedback, will incorporate into prompt")
+
         # Try LLM generation
         html = None
         screens = [
@@ -53,12 +60,13 @@ class UIGeneratorAgent(BaseAgentWorker):
 需求标题: {title}
 需求描述: {description or title}
 业务领域: {requirement.get('domain', 'general')}
-
+{rework_info}
 要求:
 1. 使用内联 CSS（无外部依赖），可直接在浏览器打开
 2. 包含搜索/筛选、数据表格、操作按钮等常见后台组件
 3. 响应式设计，浅色主题
 4. 包含空状态占位
+5. 如果提供了上一轮评审反馈，必须修复反馈中提到的 critical 和 major 级别问题
 
 输出 JSON:
 {{

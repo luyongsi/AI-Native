@@ -113,6 +113,7 @@ class BaseAgentWorker:
         self._current_span: Optional[Span] = None   # Current active span for context
         self.activity_recorder: Optional[ActivityRecorder] = None  # Activity recorder for SSE streaming
         self._processed_ids: set = set()  # Dedup: event_ids processed in last 5 min
+        self._dedup_lock = asyncio.Lock()  # Prevent concurrent dedup check races
         self._llm: object = None  # LLMProviderManager instance (shared across agents)
 
     async def init(self):
@@ -275,32 +276,23 @@ class BaseAgentWorker:
                 data = json.loads(msg.data.decode())
 
                 event_id = data.get("event_id", "")
-                # Dedup check — use set of (event_id, timestamp) tuples
-                if event_id and any(eid == event_id for eid, _ in self._processed_ids):
-                    logger.info(
-                        f"[{self.agent_id}] Duplicate message {event_id}, skipping"
-                    )
-                    await msg.ack()
-                    return
-
-                logger.info(f"[{self.agent_id}] Received NATS message on '{msg.subject}'")
-                req_id = data.get("req_id", "") or data.get("payload", {}).get("req_id", "")
-                context = data.get("payload", {})
-                context["event_type"] = data.get("event_type", "")
-                context["workflow_id"] = data.get("payload", {}).get("workflow_id", "")
-
-                # ── Ack BEFORE execute (prevents JetStream redelivery) ──
-                await msg.ack()
-
-                # Register as processed with time-based eviction
-                if event_id:
-                    self._processed_ids.add((event_id, _time.time()))
-                    # Purge entries older than 5 minutes instead of clearing all
-                    cutoff = _time.time() - 300
-                    self._processed_ids = {
-                        (eid, ts) for eid, ts in self._processed_ids
-                        if ts > cutoff
-                    }
+                # Dedup check with lock — prevents concurrent _handle() races
+                async with self._dedup_lock:
+                    if event_id and any(eid == event_id for eid, _ in self._processed_ids):
+                        logger.info(
+                            f"[{self.agent_id}] Duplicate message {event_id}, skipping"
+                        )
+                        await msg.ack()
+                        return
+                    # Register as processed with time-based eviction
+                    if event_id:
+                        self._processed_ids.add((event_id, _time.time()))
+                        # Purge entries older than 5 minutes
+                        cutoff = _time.time() - 300
+                        self._processed_ids = {
+                            (eid, ts) for eid, ts in self._processed_ids
+                            if ts > cutoff
+                        }
 
                 # Create OpenTelemetry span for agent execution
                 span = None
@@ -317,6 +309,7 @@ class BaseAgentWorker:
                     add_nats_context(span, msg.subject, context.get("event_type"))
                     span.__enter__()
 
+                result = None
                 try:
                     record_agent_start(self.agent_id, req_id)
                     result = await self.execute(req_id, context)
@@ -330,23 +323,25 @@ class BaseAgentWorker:
                     logger.error(
                         f"[{self.agent_id}] execute() failed: {exec_err}", exc_info=True
                     )
-                    return
-
+                    result = {"status": "error", "error": str(exec_err)[:500]}
                 finally:
                     if span:
                         span.__exit__(None, None, None)
 
-                # Publish result — include workflow_id for Bridge routing
-                wf_id = context.get("workflow_id", "")
-                reply_subject = f"agent.result.{self.agent_id}"
-                await self.nc.publish(reply_subject, json.dumps({
-                    "agent_id": self.agent_id,
-                    "req_id": req_id,
-                    "workflow_id": wf_id,
-                    "result": result,
-                    "timestamp": datetime.now(timezone.utc).isoformat(),
-                }, ensure_ascii=False, default=str).encode())
-                logger.info(f"[{self.agent_id}] Published result to '{reply_subject}'")
+                # Publish result — always, even on error (BUG-19: prevents workflow deadlock)
+                try:
+                    wf_id = context.get("workflow_id", "")
+                    reply_subject = f"agent.result.{self.agent_id}"
+                    await self.nc.publish(reply_subject, json.dumps({
+                        "agent_id": self.agent_id,
+                        "req_id": req_id,
+                        "workflow_id": wf_id,
+                        "result": result or {},
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                    }, ensure_ascii=False, default=str).encode())
+                    logger.info(f"[{self.agent_id}] Published result to '{reply_subject}'")
+                except Exception as pub_err:
+                    logger.error(f"[{self.agent_id}] Failed to publish agent.result: {pub_err}")
             except Exception as e:
                 logger.error(f"[{self.agent_id}] Error handling NATS message: {e}", exc_info=True)
                 try:
@@ -368,30 +363,36 @@ class BaseAgentWorker:
             logger.info(f"[{self.agent_id}] Subscribed to NATS subject: {subj}")
 
     async def report_status(self, req_id: str, status: str, detail: str):
-        """发布 agent.status.changed 事件到 NATS"""
-        payload = StatusDetail(
-            agent_id=self.agent_id,
-            req_id=req_id,
-            status=status,
-            message=detail,
-            timestamp=datetime.now(timezone.utc).isoformat()
-        )
-        subject = f"agent.status.changed.{self.agent_id}"
-        await self.nc.publish(subject, payload.model_dump_json().encode())
-        logger.info(f"[{self.agent_id}] Status -> {status}: {detail}")
+        """发布 agent.status.changed 事件到 NATS（容错：失败不抛异常）"""
+        try:
+            payload = StatusDetail(
+                agent_id=self.agent_id,
+                req_id=req_id,
+                status=status,
+                message=detail,
+                timestamp=datetime.now(timezone.utc).isoformat()
+            )
+            subject = f"agent.status.changed.{self.agent_id}"
+            await self.nc.publish(subject, payload.model_dump_json().encode())
+            logger.info(f"[{self.agent_id}] Status -> {status}: {detail}")
+        except Exception as e:
+            logger.warning(f"[{self.agent_id}] report_status failed (non-fatal): {e}")
 
     async def report_artifact(self, req_id: str, artifact_type: str, data: dict):
-        """发布 artifact.produced 事件到 NATS"""
-        payload = ArtifactRecord(
-            agent_id=self.agent_id,
-            req_id=req_id,
-            artifact_type=artifact_type,
-            data=data,
-            timestamp=datetime.now(timezone.utc).isoformat()
-        )
-        subject = f"artifact.produced.{self.agent_id}"
-        await self.nc.publish(subject, payload.model_dump_json().encode())
-        logger.info(f"[{self.agent_id}] Artifact produced: {artifact_type}")
+        """发布 artifact.produced 事件到 NATS（容错：失败不抛异常）"""
+        try:
+            payload = ArtifactRecord(
+                agent_id=self.agent_id,
+                req_id=req_id,
+                artifact_type=artifact_type,
+                data=data,
+                timestamp=datetime.now(timezone.utc).isoformat()
+            )
+            subject = f"artifact.produced.{self.agent_id}"
+            await self.nc.publish(subject, payload.model_dump_json().encode())
+            logger.info(f"[{self.agent_id}] Artifact produced: {artifact_type}")
+        except Exception as e:
+            logger.warning(f"[{self.agent_id}] report_artifact failed (non-fatal): {e}")
 
     async def record_progress(
         self,
