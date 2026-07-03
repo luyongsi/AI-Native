@@ -1,6 +1,6 @@
 [Unit]
 Description=AI Native Backend (FastAPI uvicorn)
-After=network.target docker.service postgresql.service
+After=network.target docker.service
 Requires=docker.service
 
 [Service]
