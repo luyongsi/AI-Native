@@ -21,10 +21,6 @@ from base_worker import BaseAgentWorker
 
 logger = logging.getLogger(__name__)
 
-DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
-DEEPSEEK_BASE_URL = os.environ.get("DEEPSEEK_BASE_URL", "https://uniapi.ruijie.com.cn")
-DEEPSEEK_MODEL = os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-pro-202606")
-
 
 class UIGeneratorAgent(BaseAgentWorker):
     agent_id = "A3"
@@ -33,23 +29,6 @@ class UIGeneratorAgent(BaseAgentWorker):
     def __init__(self, nats_url: str = "nats://localhost:4222"):
         super().__init__(self.agent_id, self.agent_type, nats_url)
         self._original_specs: dict = {}  # Cache for original specs by req_id
-
-    async def _call_llm(self, messages: list, temperature: float = 0.4) -> str | None:
-        if not DEEPSEEK_API_KEY:
-            return None
-        try:
-            import httpx
-            async with httpx.AsyncClient(timeout=90.0) as client:
-                resp = await client.post(
-                    f"{DEEPSEEK_BASE_URL}/v1/chat/completions",
-                    headers={"Authorization": f"Bearer {DEEPSEEK_API_KEY}", "Content-Type": "application/json"},
-                    json={"model": DEEPSEEK_MODEL, "messages": messages, "temperature": temperature, "max_tokens": 4000},
-                )
-                resp.raise_for_status()
-                return resp.json()["choices"][0]["message"]["content"]
-        except Exception as e:
-            logger.error(f"[A3] LLM call failed: {e}")
-            return None
 
     async def execute(self, req_id: str, context_package: dict) -> dict:
         requirement = context_package.get("requirement", context_package.get("requirement_draft", {}))
@@ -89,7 +68,13 @@ class UIGeneratorAgent(BaseAgentWorker):
 
 只输出 JSON。HTML 必须是完整的独立页面。"""
 
-        llm_content = await self._call_llm([{"role": "user", "content": prompt}], temperature=0.4)
+        llm_content = await self.call_llm([{"role": "user", "content": prompt}],
+            task_type="ui_prototype",
+            req_id=req_id,
+            workflow_id=context_package.get("workflow_id", ""),
+            temperature=0.4,
+            max_tokens=4000,
+        )
 
         if llm_content:
             try:
@@ -251,7 +236,13 @@ class UIGeneratorAgent(BaseAgentWorker):
 输出只需要 React 组件代码，不需要 JSON 包装。"""
 
         # Try LLM generation
-        llm_content = await self._call_llm([{"role": "user", "content": prompt}], temperature=0.4)
+        llm_content = await self.call_llm([{"role": "user", "content": prompt}],
+            task_type="ui_prototype",
+            req_id=req_id,
+            workflow_id="",
+            temperature=0.4,
+            max_tokens=4000,
+        )
 
         if llm_content:
             try:

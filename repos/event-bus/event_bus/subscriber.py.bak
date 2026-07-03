@@ -1,0 +1,196 @@
+"""
+EventSubscriber — decorator-based async subscriber for NATS JetStream.
+
+Usage::
+
+    subscriber = EventSubscriber()
+
+    @subscriber.on("gate.*.approved")
+    async def handle_gate_approved(event):
+        print(f"Gate approved: {event}")
+
+    await subscriber.start()
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+import traceback
+from typing import Any, Callable, Dict, List, Optional
+
+import nats
+from nats.js.client import JetStreamContext
+
+logger = logging.getLogger(__name__)
+
+STREAM_NAME = "AI_NATIVE_EVENTS"
+CONSUMER_PREFIX = "subscriber"
+
+Handler = Callable[[Dict[str, Any]], Any]
+
+
+class EventSubscriber:
+    """Decorator-based async subscriber with auto ack/nak semantics.
+
+    On handler success the message is acked; on exception the message is
+    nacked so NATS re-delivers it (subject to JetStream max_deliver).
+    """
+
+    def __init__(
+        self,
+        nats_url: str = "nats://localhost:4222",
+        consumer_prefix: str = CONSUMER_PREFIX,
+        ack_wait: int = 30,
+        max_deliver: int = -1,
+        max_ack_pending: int = 1000,
+    ) -> None:
+        self._nats_url = nats_url
+        self._consumer_prefix = consumer_prefix
+        self._ack_wait = ack_wait
+        self._max_deliver = max_deliver
+        self._max_ack_pending = max_ack_pending
+        self._nc: Optional[nats.NATS] = None
+        self._js: Optional[JetStreamContext] = None
+        self._handlers: Dict[str, Handler] = {}  # subject_pattern -> handler
+        self._subscriptions: List[Any] = []
+        self._running = False
+
+    # ------------------------------------------------------------------
+    # Decorator API
+    # ------------------------------------------------------------------
+
+    def on(self, subject_pattern: str) -> Callable[[Handler], Handler]:
+        """Register an async handler for a NATS subject pattern.
+
+        Example::
+
+            @sub.on("gate.*.approved")
+            async def on_gate_approved(event):
+                ...
+        """
+
+        def decorator(handler: Handler) -> Handler:
+            self._handlers[subject_pattern] = handler
+            logger.info("Registered handler %s for %s", handler.__name__, subject_pattern)
+            return handler
+
+        return decorator
+
+    # ------------------------------------------------------------------
+    # Connection
+    # ------------------------------------------------------------------
+
+    async def connect(self) -> EventSubscriber:
+        """Connect to NATS. Safe to call multiple times."""
+        if self._nc is None:
+            self._nc = await nats.connect(self._nats_url)
+            logger.info("Subscriber connected to NATS at %s", self._nats_url)
+        if self._js is None:
+            self._js = self._nc.jetstream()
+        return self
+
+    async def disconnect(self) -> None:
+        """Drain and close all subscriptions and the connection."""
+        self._running = False
+        if self._subscriptions:
+            for sub in self._subscriptions:
+                try:
+                    await sub.unsubscribe()
+                except Exception:
+                    pass
+            self._subscriptions.clear()
+        if self._nc is not None:
+            await self._nc.drain()
+            self._nc = None
+            self._js = None
+            logger.info("Subscriber disconnected")
+
+    # ------------------------------------------------------------------
+    # Start / stop
+    # ------------------------------------------------------------------
+
+    async def start(self) -> None:
+        """Start listening on all registered subject patterns."""
+        await self.connect()
+        if self._running:
+            return
+        self._running = True
+
+        for pattern, handler in self._handlers.items():
+            consumer_name = f"{self._consumer_prefix}_{pattern.replace('.', '_').replace('*', 'star')}"
+
+            # Ensure consumer exists
+            try:
+                await self._js.add_consumer(
+                    stream=STREAM_NAME,
+                    config=nats.js.api.ConsumerConfig(
+                        durable_name=consumer_name,
+                        filter_subject=pattern,
+                        ack_wait=self._ack_wait,
+                        max_deliver=self._max_deliver,
+                        max_ack_pending=self._max_ack_pending,
+                    ),
+                )
+            except Exception:
+                await self._js.update_consumer(
+                    stream=STREAM_NAME,
+                    durable=consumer_name,
+                    config=nats.js.api.ConsumerConfig(
+                        durable_name=consumer_name,
+                        filter_subject=pattern,
+                        ack_wait=self._ack_wait,
+                        max_deliver=self._max_deliver,
+                        max_ack_pending=self._max_ack_pending,
+                    ),
+                )
+
+            # Build callback wrapper with auto ack/nak
+            async def _make_callback(pat: str, fn: Handler):
+                async def _callback(msg):
+                    try:
+                        body = json.loads(msg.data.decode("utf-8"))
+                        logger.debug("Received on %s: %s", pat, body.get("event_id"))
+                        result = fn(body)
+                        # Support both sync and async handlers
+                        if asyncio.iscoroutine(result):
+                            await result
+                        await msg.ack()
+                    except Exception:
+                        logger.error(
+                            "Handler for %s failed, nacking: %s",
+                            pat,
+                            traceback.format_exc(),
+                        )
+                        try:
+                            await msg.nak()
+                        except Exception:
+                            pass
+
+                return _callback
+
+            cb = await _make_callback(pattern, handler)
+
+            sub = await self._js.subscribe(
+                stream=STREAM_NAME,
+                subject=pattern,
+                cb=cb,
+                durable=consumer_name,
+            )
+            self._subscriptions.append(sub)
+            logger.info("Subscribing to %s (consumer=%s)", pattern, consumer_name)
+
+        logger.info("EventSubscriber started — %d handler(s)", len(self._handlers))
+
+    async def stop(self) -> None:
+        """Gracefully stop the subscriber."""
+        self._running = False
+        if self._subscriptions:
+            for sub in self._subscriptions:
+                try:
+                    await sub.unsubscribe()
+                except Exception:
+                    pass
+            self._subscriptions.clear()
+            logger.info("EventSubscriber stopped")

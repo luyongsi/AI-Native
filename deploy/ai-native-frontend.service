@@ -1,0 +1,17 @@
+[Unit]
+Description=AI Native Frontend (Next.js)
+After=network.target ai-native-backend.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/ai-native/frontend
+EnvironmentFile=/etc/ai-native.env
+ExecStart=/usr/bin/npm start -- -p 80
+Restart=always
+RestartSec=5
+StandardOutput=append:/var/log/ai-native-frontend.log
+StandardError=append:/var/log/ai-native-frontend.log
+
+[Install]
+WantedBy=multi-user.target

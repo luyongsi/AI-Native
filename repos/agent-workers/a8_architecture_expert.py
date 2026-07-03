@@ -1,13 +1,12 @@
 """A8: Architecture Expert Agent (架构评审)
 
 触发: dag.created (与 A7 并行)
-真实 LLM: 调用 DeepSeek API 进行架构评审、红线检查、循环依赖检测
+使用统一 call_llm() 进行架构评审、红线检查、循环依赖检测
 评分 >= 70 通过，<70 → Gate 2 人工裁决
 """
 import asyncio
 import json
 import logging
-import os
 from datetime import datetime, timezone
 
 from base_worker import BaseAgentWorker
@@ -17,9 +16,6 @@ logger = logging.getLogger(__name__)
 AGENT_ID = "A8"
 AGENT_TYPE = "architecture_expert"
 
-DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
-DEEPSEEK_BASE_URL = os.environ.get("DEEPSEEK_BASE_URL", "https://uniapi.ruijie.com.cn")
-DEEPSEEK_MODEL = os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-pro-202606")
 
 
 class ArchitectureExpertAgent(BaseAgentWorker):
@@ -30,23 +26,6 @@ class ArchitectureExpertAgent(BaseAgentWorker):
 
     def __init__(self, nats_url: str = "nats://localhost:4222"):
         super().__init__(AGENT_ID, AGENT_TYPE, nats_url)
-
-    async def _call_llm(self, messages: list, temperature: float = 0.2) -> str | None:
-        if not DEEPSEEK_API_KEY:
-            return None
-        try:
-            import httpx
-            async with httpx.AsyncClient(timeout=180.0) as client:
-                resp = await client.post(
-                    f"{DEEPSEEK_BASE_URL}/v1/chat/completions",
-                    headers={"Authorization": f"Bearer {DEEPSEEK_API_KEY}", "Content-Type": "application/json"},
-                    json={"model": DEEPSEEK_MODEL, "messages": messages, "temperature": temperature, "max_tokens": 3000},
-                )
-                resp.raise_for_status()
-                return resp.json()["choices"][0]["message"]["content"]
-        except Exception as e:
-            logger.error(f"[A8] LLM call failed: {e}")
-            return None
 
     async def execute(self, req_id: str, context_package: dict) -> dict:
         dag = context_package.get("dag", context_package.get("payload", {}))
@@ -73,7 +52,7 @@ class ArchitectureExpertAgent(BaseAgentWorker):
             "layer_violations": len(layer_violations),
             "db_issues": len(db_issues),
         }
-        review = await self._llm_review(req_id, json.dumps(dag_summary, ensure_ascii=False))
+        review = await self._llm_review(req_id, json.dumps(dag_summary, ensure_ascii=False), context_package)
 
         if review is None:
             review = self._fallback_review(nodes, edges, cycle_detected, cycle_path, layer_violations, db_issues)
@@ -134,7 +113,7 @@ class ArchitectureExpertAgent(BaseAgentWorker):
                                  f"架构评审: {verdict} (score={score}, violations={len(violations)})")
         return {"status": "completed", "review": summary}
 
-    async def _llm_review(self, req_id: str, dag_text: str) -> dict | None:
+    async def _llm_review(self, req_id: str, dag_text: str, context_package: dict) -> dict | None:
         prompt = f"""你是资深架构师。对以下 DAG 进行架构评审。
 
 ## DAG 数据
@@ -153,7 +132,13 @@ class ArchitectureExpertAgent(BaseAgentWorker):
 检查要点: 架构分层合理性、循环依赖、DB变更回滚、安全漏洞、性能风险、模块耦合度
 只输出 JSON"""
 
-        content = await self._call_llm([{"role": "user", "content": prompt}], temperature=0.1)
+        content = await self.call_llm([{"role": "user", "content": prompt}],
+            task_type="architecture_review",
+            req_id=req_id,
+            workflow_id=context_package.get("workflow_id", ""),
+            temperature=0.1,
+            max_tokens=2000,
+        )
         if not content:
             return None
         try:

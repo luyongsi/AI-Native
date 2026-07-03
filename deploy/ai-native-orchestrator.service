@@ -1,0 +1,18 @@
+[Unit]
+Description=AI Native Orchestrator Worker (Temporal)
+After=network.target docker.service ai-native-backend.service
+Requires=docker.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/ai-native/repos/orchestrator
+EnvironmentFile=/etc/ai-native.env
+ExecStart=/usr/bin/python3 worker.py
+Restart=always
+RestartSec=10
+StandardOutput=append:/var/log/orchestrator-worker.log
+StandardError=append:/var/log/orchestrator-worker.log
+
+[Install]
+WantedBy=multi-user.target

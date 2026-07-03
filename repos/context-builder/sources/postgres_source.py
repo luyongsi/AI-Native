@@ -47,7 +47,7 @@ class PostgresSource:
         return self._pool
 
     async def query(self, req_id: str) -> List[Dict[str, Any]]:
-        """Query requirement history, related PRs, and specs.
+        """Query requirement history, related PRs, specs, and test assets.
 
         Args:
             req_id: Requirement identifier
@@ -70,6 +70,10 @@ class PostgresSource:
                 # Query 3: Existing specs
                 existing_specs = await self._query_existing_specs(conn, req_id)
                 candidates.extend(existing_specs)
+
+                # Query 4: Test Assets (NEW - highest priority for A9)
+                test_assets = await self._query_test_assets(conn, req_id)
+                candidates.extend(test_assets)
 
         except Exception as e:
             logger.error(f"PostgreSQL query failed for req_id={req_id}: {e}")
@@ -227,6 +231,81 @@ class PostgresSource:
         except Exception as e:
             logger.error(f"Failed to query existing specs: {e}")
             return []
+
+    async def _query_test_assets(self, conn: asyncpg.Connection, req_id: str) -> List[Dict[str, Any]]:
+        """Query test assets from test_assets table for TDD injection into A9 context.
+
+        Args:
+            conn: Database connection
+            req_id: Requirement identifier
+
+        Returns:
+            List of test asset items (highest priority)
+        """
+        try:
+            rows = await conn.fetch("""
+                SELECT
+                    id,
+                    req_id,
+                    unit_tests,
+                    integration_tests,
+                    e2e_tests,
+                    visual_tests,
+                    coverage_targets,
+                    total_cases,
+                    priority_distribution,
+                    source,
+                    created_at
+                FROM test_assets
+                WHERE req_id = $1
+                ORDER BY created_at DESC
+                LIMIT 1
+            """, req_id)
+
+            candidates = []
+            for row in rows:
+                # Parse JSONB fields
+                import json
+                unit_tests = json.loads(row['unit_tests']) if row['unit_tests'] else []
+                integration_tests = json.loads(row['integration_tests']) if row['integration_tests'] else []
+                e2e_tests = json.loads(row['e2e_tests']) if row['e2e_tests'] else []
+                visual_tests = json.loads(row['visual_tests']) if row['visual_tests'] else []
+                coverage_targets = json.loads(row['coverage_targets']) if row['coverage_targets'] else {}
+
+                # Create comprehensive test assets object
+                test_assets_obj = {
+                    'unit_tests': unit_tests,
+                    'integration_tests': integration_tests,
+                    'e2e_tests': e2e_tests,
+                    'visual_tests': visual_tests,
+                    'coverage_targets': coverage_targets,
+                    'total_cases': row['total_cases'],
+                    'priority_distribution': json.loads(row['priority_distribution']) if row['priority_distribution'] else {},
+                }
+
+                candidates.append({
+                    'source': 'postgres_test_assets',
+                    'source_id': str(row['id']),
+                    'req_id': req_id,
+                    'type': 'test_assets',
+                    'title': f"Test Assets: {row['total_cases']} cases ({row['source']})",
+                    'content': json.dumps(test_assets_obj, ensure_ascii=False),
+                    'test_assets': test_assets_obj,  # Structured data for A9 consumption
+                    'metadata': {
+                        'total_cases': row['total_cases'],
+                        'source': row['source'],
+                        'coverage_targets': coverage_targets,
+                        'created_at': str(row['created_at']),
+                    },
+                    'relevance': 1.0,  # Highest priority - test assets must be in context
+                })
+
+            return candidates
+
+        except Exception as e:
+            logger.error(f"Failed to query test assets: {e}")
+            return []
+
 
     async def close(self):
         """Close connection pool."""

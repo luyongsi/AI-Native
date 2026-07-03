@@ -1,0 +1,24 @@
+@import 'tailwindcss';
+
+@theme {
+  --font-sans: 'Geist', 'SF Pro', system-ui, sans-serif;
+  --font-mono: 'Geist Mono', 'JetBrains Mono', monospace;
+  --color-accent: #f59e0b;
+}
+
+* { box-sizing: border-box; }
+body { font-family: var(--font-sans); -webkit-font-smoothing: antialiased; }
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+
+/* React Grid Layout */
+.react-grid-layout { position: relative; }
+.react-grid-item { transition: all 200ms ease; }
+.react-grid-item.react-grid-placeholder { background: #e2e8f0; border-radius: 1rem; opacity: 0.3; }
+
+/* React Flow overrides */
+.react-flow__node { font-size: 12px; }

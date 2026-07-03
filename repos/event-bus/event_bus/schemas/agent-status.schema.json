@@ -1,0 +1,23 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://ai-native.dev/schemas/agent-status.schema.json",
+  "title": "Agent Status Event",
+  "description": "Event emitted when an agent changes status",
+  "type": "object",
+  "required": ["event_id", "event_type", "timestamp", "agent_id", "status"],
+  "properties": {
+    "event_id": { "type": "string", "format": "uuid" },
+    "event_type": { "type": "string", "const": "agent.status.changed" },
+    "timestamp": { "type": "string", "format": "date-time" },
+    "req_id": { "type": "string" },
+    "agent_id": { "type": "string" },
+    "status": { "type": "string", "enum": ["idle", "busy", "error", "offline"] },
+    "context": {
+      "type": "object",
+      "properties": {
+        "previous_status": { "type": "string" },
+        "message": { "type": "string" }
+      }
+    }
+  }
+}

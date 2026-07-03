@@ -4,6 +4,9 @@ GET  /api/approvals                  - List approvals, filter by gate/status
 POST /api/approvals                  - Create approval record (human or agent-auto)
 POST /api/approvals/{id}/approve    - Approve a gate approval
 POST /api/approvals/{id}/reject     - Reject a gate approval
+
+Orchestrator Refactor: Gate approval now signals Temporal Workflow directly.
+Agent dispatch is handled by the Workflow, not by this API.
 """
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
@@ -15,10 +18,10 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/approvals", tags=["approvals"])
 
-# Gate SLA in hours (per design doc §3.0)
+# Gate SLA in hours (per design doc 3.0)
 GATE_SLA_HOURS = {0: 48, 1: 24, 2: 12, 3: 4}
 
-# ── Gate metadata for frontend differentiation ──────────────────────────
+# Gate metadata for frontend differentiation
 GATE_META = {
     0: {"label": "业务确认", "icon": "clipboard", "description": "A1+A2 分析完成后，业务方确认需求理解正确"},
     1: {"label": "Spec 确认", "icon": "file-text", "description": "A4 生成 Spec/OpenAPI/ERD 后确认设计方案"},
@@ -115,8 +118,8 @@ async def list_approvals(
 
 @router.post("")
 async def create_approval(
-    req_id: Optional[str] = Query(None),
-    gate: int = Query(1),
+    req_id: str = Query(""),
+    gate: int = Query(0),
     body: Optional[AutoCreateRequest] = None,
 ):
     """Create approval (human via query params, or agent-auto via JSON body)."""
@@ -168,11 +171,11 @@ async def check_overdue():
         now = datetime.now(timezone.utc)
         rows = await conn.fetch(
             "SELECT * FROM gate_approvals WHERE status = 'pending' AND sla_deadline < $1", now)
-        overdue = []
-        for row in rows:
-            overdue.append({"id": str(row["id"]), "req_id": str(row["req_id"]),
-                            "gate": row["gate"], "sla_deadline": row["sla_deadline"].isoformat()})
-        return {"overdue": overdue, "count": len(overdue)}
+        return {"overdue": len(rows), "items": [
+            {"id": str(r["id"]), "req_id": str(r["req_id"]) if r["req_id"] else None,
+             "gate": r["gate"], "sla_deadline": r["sla_deadline"].isoformat()}
+            for r in rows
+        ]}
     finally:
         await conn.close()
 
@@ -184,7 +187,7 @@ async def approve(approval_id: str):
         row = await conn.fetchrow("SELECT * FROM gate_approvals WHERE id = $1::uuid", approval_id)
         if not row:
             raise HTTPException(status_code=404, detail="Approval not found")
-        if row["status"] not in ("pending",):
+        if row["status"] not in ("pending", "overdue"):
             raise HTTPException(status_code=409, detail=f"Cannot approve: current status is {row['status']}")
 
         req_id = str(row["req_id"])
@@ -197,75 +200,23 @@ async def approve(approval_id: str):
         result: dict = {"id": str(row["id"]), "status": "approved", "resolved_at": now.isoformat(),
                         "gate": gate, "gate_meta": GATE_META.get(gate)}
 
+        # Signal Temporal workflow
+        await _signal_temporal_gate(req_id, gate, result)
+
         await _advance_requirement(conn, req_id, gate)
 
-        # Signal Temporal workflow (non-blocking)
-        try:
-            from temporalio.client import Client
-            client = await Client.connect("localhost:7233", namespace="ai-native")
-            workflow_id = f"req-{req_id[:8]}"
-            handle = client.get_workflow_handle(workflow_id)
-            await handle.signal(RequirementWorkflow.approve_gate, f"gate_{gate}")
-            result["temporal_signaled"] = True
-        except Exception:
-            pass
-
-        # ── Gate-specific NATS routing ──────────────────────────────────
-        await _dispatch_gate_agents(req_id, gate, result)
         return result
     finally:
         await conn.close()
 
 
-async def _dispatch_gate_agents(req_id: str, gate: int, result: dict):
-    """Publish NATS events per gate — routes to the correct downstream agents."""
-    try:
-        import nats, json as _json
-        nc = await nats.connect("nats://localhost:4222")
-        now_ts = datetime.now(timezone.utc).isoformat()
-
-        if gate == 0:
-            # Gate 0 (业务确认) → A2 completed, trigger A3 UI Generator
-            # Also signals the analyzer loop to move forward
-            envelope = {"event_id": f"gate0-approved-{req_id}", "event_type": "gate.0.approved",
-                        "timestamp": now_ts, "payload": {"req_id": req_id, "gate": 0}, "req_id": req_id}
-            await nc.publish("gate.0.approved", _json.dumps(envelope, ensure_ascii=False).encode())
-            result["workflow"] = "ui_generator_triggered"
-
-        elif gate == 1:
-            # Gate 1 (Spec确认) → A4 → A5 → A6 pipeline
-            envelope = {"event_id": f"spec-ready-{req_id}", "event_type": "spec.ready.designing",
-                        "timestamp": now_ts, "payload": {"req_id": req_id, "gate": 1, "status": "designing"},
-                        "req_id": req_id}
-            await nc.publish("spec.ready.designing", _json.dumps(envelope, ensure_ascii=False).encode())
-            result["workflow"] = "spec_writer_started"
-
-        elif gate == 2:
-            # Gate 2 (架构确认) → trigger A9 Dev Agent
-            envelope = {"event_id": f"dev-start-{req_id}", "event_type": "context.ready.dev_agent",
-                        "timestamp": now_ts, "payload": {"req_id": req_id, "state": "developing"}, "req_id": req_id}
-            await nc.publish("context.ready.dev_agent", _json.dumps(envelope, ensure_ascii=False).encode())
-            result["workflow"] = "dev_started"
-
-        elif gate == 3:
-            # Gate 3 (发布确认) → trigger A13 Release Agent
-            envelope = {"event_id": f"release-start-{req_id}", "event_type": "gate.3.approved",
-                        "timestamp": now_ts, "payload": {"req_id": req_id, "state": "releasing"}, "req_id": req_id}
-            await nc.publish("gate.3.approved", _json.dumps(envelope, ensure_ascii=False).encode())
-            result["workflow"] = "release_started"
-
-        await nc.close()
-    except Exception as wf_err:
-        logger.warning(f"Failed to dispatch agent after gate {gate} approval: {wf_err}")
-
-
 async def _advance_requirement(conn, req_id: str, gate: int):
     """Update requirement status based on gate approval."""
     gate_status_map = {
-        0: "analyzing",    # Gate 0 → continue with A3 UI
-        1: "designing",    # Gate 1 → start designing (A4)
-        2: "developing",   # Gate 2 → start developing (A9)
-        3: "releasing",    # Gate 3 → start releasing (A13)
+        0: "analyzing",
+        1: "designing",
+        2: "developing",
+        3: "releasing",
     }
     new_status = gate_status_map.get(gate)
     if new_status:
@@ -274,6 +225,29 @@ async def _advance_requirement(conn, req_id: str, gate: int):
             "UPDATE requirements SET status = $1, updated_at = $2 WHERE id = $3::uuid",
             new_status, now, req_id)
         logger.info(f"Requirement {req_id} advanced to {new_status} (gate {gate} approved)")
+
+
+async def _signal_temporal_gate(req_id: str, gate: int, result: dict):
+    """Send approve_gate Signal to the Temporal Workflow."""
+    try:
+        from temporalio.client import Client
+        client = await Client.connect("localhost:7233", namespace="ai-native")
+
+        req_prefix = req_id[:8]
+        async for wf in client.list_workflows(
+            f'WorkflowType="RequirementWorkflow" and ExecutionStatus="Running"'
+        ):
+            if wf.id.startswith(f"req-{req_prefix}"):
+                handle = client.get_workflow_handle(wf.id)
+                await handle.signal("approve_gate", f"gate_{gate}")
+                result["temporal_signaled"] = True
+                result["workflow_id"] = wf.id
+                logger.info("Signaled approve_gate gate=%d -> workflow=%s", gate, wf.id)
+                return
+
+        logger.warning("No running RequirementWorkflow found for req_id prefix=%s", req_prefix)
+    except Exception as e:
+        logger.warning(f"Failed to signal Temporal workflow for gate {gate}: {e}")
 
 
 @router.post("/{approval_id}/reject")

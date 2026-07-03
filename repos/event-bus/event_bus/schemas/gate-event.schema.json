@@ -1,0 +1,62 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://ai-native.dev/schemas/gate-event.schema.json",
+  "title": "Gate Event",
+  "description": "Event emitted when a gate transitions state",
+  "type": "object",
+  "required": [
+    "event_id",
+    "event_type",
+    "timestamp",
+    "gate_level",
+    "action",
+    "context"
+  ],
+  "properties": {
+    "event_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "event_type": {
+      "type": "string",
+      "pattern": "^gate\\.\\d+\\.(approved|rejected|resubmitted)$"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "req_id": {
+      "type": "string"
+    },
+    "agent_id": {
+      "type": "string"
+    },
+    "gate_level": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 3
+    },
+    "action": {
+      "type": "string",
+      "enum": [
+        "approved",
+        "rejected",
+        "resubmitted"
+      ]
+    },
+    "context": {
+      "type": "object",
+      "properties": {
+        "reason": {
+          "type": "string"
+        },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}

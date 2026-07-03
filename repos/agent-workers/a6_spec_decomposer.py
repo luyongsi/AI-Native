@@ -22,10 +22,6 @@ logger = logging.getLogger(__name__)
 AGENT_ID = "A6"
 AGENT_TYPE = "spec_decomposer"
 
-DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
-DEEPSEEK_BASE_URL = os.environ.get("DEEPSEEK_BASE_URL", "https://uniapi.ruijie.com.cn")
-DEEPSEEK_MODEL = os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-pro-202606")
-
 
 class SpecDecomposerAgent(BaseAgentWorker):
     agent_id = AGENT_ID
@@ -33,23 +29,6 @@ class SpecDecomposerAgent(BaseAgentWorker):
 
     def __init__(self, nats_url: str = "nats://localhost:4222"):
         super().__init__(AGENT_ID, AGENT_TYPE, nats_url)
-
-    async def _call_llm(self, messages: list, temperature: float = 0.2) -> str | None:
-        if not DEEPSEEK_API_KEY:
-            return None
-        try:
-            import httpx
-            async with httpx.AsyncClient(timeout=120.0) as client:
-                resp = await client.post(
-                    f"{DEEPSEEK_BASE_URL}/v1/chat/completions",
-                    headers={"Authorization": f"Bearer {DEEPSEEK_API_KEY}", "Content-Type": "application/json"},
-                    json={"model": DEEPSEEK_MODEL, "messages": messages, "temperature": temperature, "max_tokens": 4000},
-                )
-                resp.raise_for_status()
-                return resp.json()["choices"][0]["message"]["content"]
-        except Exception as e:
-            logger.error(f"[A6] LLM call failed: {e}")
-            return None
 
     async def execute(self, req_id: str, context_package: dict) -> dict:
         event_type = context_package.get("event_type", "")
@@ -72,7 +51,7 @@ class SpecDecomposerAgent(BaseAgentWorker):
         await self.report_status(req_id, "running", "Phase 1: LLM 拆解任务")
 
         # Try LLM decomposition
-        dag = await self._llm_decompose(title, spec, draft)
+        dag = await self._llm_decompose(title, spec, draft, req_id, context_package)
 
         if dag is None:
             await self.report_status(req_id, "running", "Fallback: 规则拆解")
@@ -83,24 +62,12 @@ class SpecDecomposerAgent(BaseAgentWorker):
 
         await self.report_artifact(req_id, "dag", dag)
 
-        # Publish dag.created event to NATS
-        envelope = {
-            "event_id": f"dag-created-{req_id}",
-            "event_type": "dag.created",
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "payload": dag,
-            "req_id": req_id,
-            "agent_id": AGENT_ID,
-        }
-        await self.nc.publish("dag.created", json.dumps(envelope, ensure_ascii=False).encode())
-        logger.info(f"[A6] Published dag.created for req={req_id}")
-
         await self.report_status(req_id, "completed",
                                  f"DAG 生成完成: {len(dag.get('nodes',[]))} 节点")
 
         return {"status": "completed", "dag": dag}
 
-    async def _llm_decompose(self, title: str, spec: dict, draft: dict) -> dict | None:
+    async def _llm_decompose(self, title: str, spec: dict, draft: dict, req_id: str, context_package: dict) -> dict | None:
         """Use LLM to decompose spec into task DAG"""
         prompt = f"""你是一个技术项目经理。将以下需求拆解为开发任务 DAG。
 
@@ -127,7 +94,13 @@ ERD: {json.dumps(spec.get('erd', {}), ensure_ascii=False, indent=2)[:1000]}
 - 标注需要人工审核的任务（complexity=high）
 - 只输出 JSON"""
 
-        content = await self._call_llm([{"role": "user", "content": prompt}], temperature=0.2)
+        content = await self.call_llm([{"role": "user", "content": prompt}],
+            task_type="task_decomposition",
+            req_id=req_id,
+            workflow_id=context_package.get("workflow_id", ""),
+            temperature=0.2,
+            max_tokens=4000,
+        )
         if not content:
             return None
 

@@ -1,0 +1,24 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://ai-native.dev/schemas/test-completed.schema.json",
+  "title": "Test Completed Event",
+  "description": "Event emitted when a test run completes",
+  "type": "object",
+  "required": ["event_id", "event_type", "timestamp", "test_result"],
+  "properties": {
+    "event_id": { "type": "string", "format": "uuid" },
+    "event_type": { "type": "string", "enum": ["test.completed", "test.failed"] },
+    "timestamp": { "type": "string", "format": "date-time" },
+    "req_id": { "type": "string" },
+    "agent_id": { "type": "string" },
+    "test_result": {
+      "type": "object",
+      "properties": {
+        "test_name": { "type": "string" },
+        "passed": { "type": "boolean" },
+        "duration_ms": { "type": "number" },
+        "details": { "type": "string" }
+      }
+    }
+  }
+}

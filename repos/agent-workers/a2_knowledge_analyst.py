@@ -21,9 +21,6 @@ from base_worker import BaseAgentWorker
 
 logger = logging.getLogger(__name__)
 
-DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
-DEEPSEEK_BASE_URL = os.environ.get("DEEPSEEK_BASE_URL", "https://uniapi.ruijie.com.cn")
-DEEPSEEK_MODEL = os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-pro-202606")
 MC_BACKEND_URL = os.environ.get("MC_BACKEND_URL", "http://localhost:8000")
 NEO4J_URL = os.environ.get("NEO4J_URL", "")
 NEO4J_USER = os.environ.get("NEO4J_USER", "neo4j")
@@ -70,37 +67,6 @@ class A2KnowledgeAnalyst(BaseAgentWorker):
         self.rag = RAGRetriever(api_base_url=MC_BACKEND_URL)
         self.neo4j_available = bool(NEO4J_URL)
 
-    async def _call_llm(
-        self, messages: list, temperature: float = 0.3
-    ) -> Optional[str]:
-        """Call DeepSeek LLM for analysis."""
-        if not DEEPSEEK_API_KEY:
-            logger.warning("[A2] DeepSeek API key not configured, using template generation")
-            return None
-
-        try:
-            import httpx
-
-            async with httpx.AsyncClient(timeout=60.0) as client:
-                resp = await client.post(
-                    f"{DEEPSEEK_BASE_URL}/v1/chat/completions",
-                    headers={
-                        "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
-                        "Content-Type": "application/json",
-                    },
-                    json={
-                        "model": DEEPSEEK_MODEL,
-                        "messages": messages,
-                        "temperature": temperature,
-                        "max_tokens": 2000,
-                    },
-                )
-                resp.raise_for_status()
-                return resp.json()["choices"][0]["message"]["content"]
-        except Exception as e:
-            logger.error(f"[A2] LLM call failed: {e}")
-            return None
-
     async def execute(self, req_id: str, context_package: dict) -> dict:
         """Execute knowledge analysis with RAG integration."""
         start_time = time.time()
@@ -141,7 +107,7 @@ class A2KnowledgeAnalyst(BaseAgentWorker):
             await self.report_status(req_id, "running", "Phase 4: 知识融合")
             phase4_start = time.time()
             knowledge_package = await self.fuse_knowledge(
-                similar_reqs, dependencies, related_prs, title or raw
+                similar_reqs, dependencies, related_prs, title or raw, req_id, context_package
             )
             A2_EXECUTION_DURATION_SECONDS.labels(phase="knowledge_fusion").observe(
                 time.time() - phase4_start
@@ -247,10 +213,12 @@ class A2KnowledgeAnalyst(BaseAgentWorker):
         dependencies: List[Dict[str, Any]],
         related_prs: List[Dict[str, Any]],
         query_text: str,
+        req_id: str = "",
+        context_package: dict | None = None,
     ) -> Dict[str, Any]:
         """Fuse knowledge from multiple sources."""
         # Extract key insights from similar requirements
-        summary = await self.summarize_similar_requirements(similar_reqs[:5])
+        summary = await self.summarize_similar_requirements(similar_reqs[:5], req_id=req_id, context_package=context_package or {})
 
         # Extract code patterns (if available in metadata)
         code_patterns = self._extract_code_patterns(similar_reqs)
@@ -283,7 +251,7 @@ class A2KnowledgeAnalyst(BaseAgentWorker):
 
         return knowledge_package
 
-    async def summarize_similar_requirements(self, requirements: List[Dict]) -> str:
+    async def summarize_similar_requirements(self, requirements: List[Dict], req_id: str = "", context_package: dict | None = None) -> str:
         """Generate LLM-based summary of similar requirements."""
         if not requirements:
             return "No similar requirements found. Consider zero-based design."
@@ -305,8 +273,13 @@ Provide:
 
 Be concise and actionable."""
 
-        llm_response = await self._call_llm(
-            [{"role": "user", "content": prompt}], temperature=0.3
+        llm_response = await self.call_llm(
+            [{"role": "user", "content": prompt}],
+            task_type="knowledge_analysis",
+            req_id=req_id,
+            workflow_id=context_package.get("workflow_id", ""),
+            temperature=0.3,
+            max_tokens=2000,
         )
 
         if llm_response:

@@ -1,0 +1,38 @@
+DEPLOYMENT NOTE FOR 172.27.78.109 SERVER
+
+The pgvector infrastructure is already deployed:
+- pgvector/pgvector:pg16 running
+- pgvector extension v0.8.3 already enabled
+- Redis available at redis://172.27.78.109:6379
+- Neo4j available at neo4j://172.27.78.109:7687
+
+IMPLEMENTATION STATUS
+====================
+
+All code has been created and is ready to deploy to the server.
+
+Database Setup (on 172.27.78.109):
+1. Upload migration file: 006_pgvector.sql
+2. Execute: docker exec ai-postgres psql -U ai_native -d ai_native -f migrations/006_pgvector.sql
+   Note: CREATE EXTENSION line will be skipped (already enabled)
+   Table and indexes will be created
+
+Python Deployment (in /opt/ai-native/repos/mc-backend/):
+1. Copy services/embedding_service.py
+2. Update api/knowledge.py
+3. Update main.py
+4. Update requirements.txt
+5. Run: pip install -r requirements.txt
+6. Restart backend service
+
+Orchestrator Deployment (in /opt/ai-native/repos/orchestrator/):
+1. Copy workflows/indexing_workflow.py
+2. Copy activities/embedding_index.py
+3. Register IndexingWorkflow in worker
+
+Environment Configuration:
+- DATABASE_URL: postgresql://ai_native:ai_native_dev@172.27.78.109:5432/ai_native
+- REDIS_URL: redis://172.27.78.109:6379
+- DEEPSEEK_API_KEY: (optional - uses mock if not set)
+
+All code is production-ready and fully backward compatible.

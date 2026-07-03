@@ -1,0 +1,24 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://ai-native.dev/schemas/loop-tripped.schema.json",
+  "title": "Loop Tripped Event",
+  "description": "Event emitted when the main dev loop trips",
+  "type": "object",
+  "required": ["event_id", "event_type", "timestamp", "loop_id"],
+  "properties": {
+    "event_id": { "type": "string", "format": "uuid" },
+    "event_type": { "type": "string", "const": "loop.tripped" },
+    "timestamp": { "type": "string", "format": "date-time" },
+    "req_id": { "type": "string" },
+    "agent_id": { "type": "string" },
+    "loop_id": { "type": "string" },
+    "trigger": { "type": "string" },
+    "context": {
+      "type": "object",
+      "properties": {
+        "iteration": { "type": "integer" },
+        "reason": { "type": "string" }
+      }
+    }
+  }
+}

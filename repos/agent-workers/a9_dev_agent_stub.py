@@ -59,7 +59,7 @@ class DevAgent(BaseAgentWorker):
             "openapi_paths": len(paths),
             "erd_tables": len(tables),
         }
-        result = await self.cc.execute_task(task_spec)
+        result = await self.cc.execute_task(task_spec, req_id=req_id)
 
         # Phase 3: 构建 diff 结构
         await self.report_status(req_id, "running", "Phase 3: 构建 diff")

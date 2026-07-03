@@ -1,0 +1,34 @@
+version: "3.9"
+
+services:
+  postgres:
+    restart: always
+    environment:
+      POSTGRES_PASSWORD: ${PG_PASSWORD:-ai_native_prod}
+
+  nats:
+    restart: always
+
+  temporal:
+    restart: always
+    environment:
+      TEMPORAL_GRPC_ENDPOINT: temporal:7233  # Fixed: use Docker DNS
+
+  redis:
+    restart: always
+
+  neo4j:
+    restart: always
+    environment:
+      NEO4J_AUTH: neo4j/${NEO4J_PASSWORD:-password123}
+
+  prometheus:
+    restart: always
+
+  grafana:
+    restart: always
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
+
+  loki:
+    restart: always

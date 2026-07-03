@@ -15,12 +15,14 @@ processors:
     limit_mib: 512
 
 exporters:
-  otlp/tempo:
-    endpoint: tempo:4317
+  otlp/jaeger:
+    endpoint: jaeger:14250
     tls:
       insecure: true
-  prometheusremotewrite/mimir:
-    endpoint: http://mimir:9009/api/v1/push
+  jaeger/http:
+    endpoint: http://jaeger:14268/api/traces
+  prometheusremotewrite/prometheus:
+    endpoint: http://prometheus:9090/api/v1/write
   loki:
     endpoint: http://loki:3100/loki/api/v1/push
 
@@ -29,11 +31,11 @@ service:
     traces:
       receivers: [otlp]
       processors: [memory_limiter, batch]
-      exporters: [otlp/tempo]
+      exporters: [otlp/jaeger, jaeger/http]
     metrics:
       receivers: [otlp]
       processors: [memory_limiter, batch]
-      exporters: [prometheusremotewrite/mimir]
+      exporters: [prometheusremotewrite/prometheus]
     logs:
       receivers: [otlp]
       processors: [memory_limiter, batch]

@@ -1,0 +1,140 @@
+{
+  "annotations": {"list": []},
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "thresholds"},
+          "mappings": [],
+          "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "red", "value": 1}]},
+          "unit": "none"
+        }
+      },
+      "gridPos": {"h": 5, "w": 5, "x": 0, "y": 0},
+      "id": 1,
+      "options": {"colorMode": "value", "graphMode": "area", "reduceOptions": {"calcs": ["sum"], "fields": "", "values": false}, "textMode": "auto"},
+      "pluginVersion": "11.6.0",
+      "targets": [{"datasource": {"type": "prometheus", "uid": "${datasource}"}, "expr": "sum(gate_sla_breaches_total)", "legendFormat": "SLA Breaches", "refId": "A"}],
+      "title": "SLA 违约总数",
+      "type": "stat"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {"fillOpacity": 80, "lineWidth": 1, "spanNulls": true, "stacking": {"mode": "normal"}},
+          "unit": "s"
+        }
+      },
+      "gridPos": {"h": 5, "w": 7, "x": 5, "y": 0},
+      "id": 2,
+      "options": {"displayLabels": ["name"], "legend": {"displayMode": "list", "placement": "right"}, "pieType": "donut", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "tooltip": {"mode": "multi"}},
+      "targets": [{"datasource": {"type": "prometheus", "uid": "${datasource}"}, "expr": "approvals_total", "legendFormat": "Gate {{gate}} ({{status}})", "refId": "A"}],
+      "title": "审批状态分布",
+      "type": "piechart"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "thresholds"},
+          "mappings": [{"type": "value", "value": "0"}, {"type": "range", "from": "1", "to": "3600", "color": "red"}, {"type": "range", "from": "3601", "to": "14400", "color": "yellow"}, {"type": "range", "from": "14401", "to": "999999", "color": "green"}],
+          "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "yellow", "value": 3600}, {"color": "green", "value": 14400}]},
+          "unit": "s"
+        }
+      },
+      "gridPos": {"h": 5, "w": 6, "x": 12, "y": 0},
+      "id": 3,
+      "options": {"reduceOptions": {"calcs": ["min"], "fields": "", "values": false}, "textMode": "value"},
+      "pluginVersion": "11.6.0",
+      "targets": [{"datasource": {"type": "prometheus", "uid": "${datasource}"}, "expr": "min(gate_sla_remaining_seconds > 0)", "legendFormat": "Min SLA", "refId": "A"}],
+      "title": "最紧迫 SLA 剩余",
+      "type": "stat"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {"fillOpacity": 15, "lineWidth": 2, "spanNulls": true},
+          "unit": "s"
+        }
+      },
+      "gridPos": {"h": 9, "w": 18, "x": 0, "y": 5},
+      "id": 4,
+      "options": {"legend": {"calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom"}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "targets": [{"datasource": {"type": "prometheus", "uid": "${datasource}"}, "expr": "gate_sla_remaining_seconds", "legendFormat": "Gate {{gate}} - {{req_id}}", "refId": "A"}],
+      "title": "各 Gate SLA 剩余时间",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {"fillOpacity": 80, "lineWidth": 1, "spanNulls": true},
+          "unit": "short"
+        }
+      },
+      "gridPos": {"h": 9, "w": 6, "x": 18, "y": 5},
+      "id": 5,
+      "options": {"displayMode": "gradient", "minVizHeight": 50, "minVizWidth": 6, "orientation": "horizontal", "reduceOptions": {"calcs": ["sum"], "fields": "", "values": false}, "showUnfilled": true},
+      "targets": [{"datasource": {"type": "prometheus", "uid": "${datasource}"}, "expr": "gate_sla_breaches_total", "legendFormat": "Gate {{gate}}", "refId": "A"}],
+      "title": "SLA 违约按 Gate 分布",
+      "type": "bargauge"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {"fillOpacity": 15, "lineWidth": 2, "spanNulls": true},
+          "unit": "short"
+        }
+      },
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 14},
+      "id": 6,
+      "options": {"legend": {"displayMode": "table", "placement": "bottom"}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "targets": [{"datasource": {"type": "prometheus", "uid": "${datasource}"}, "expr": "rate(pipeline_stage_transitions_total[5m])", "legendFormat": "{{from_stage}} → {{to_stage}}", "refId": "A"}],
+      "title": "流水线阶段流转速率",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {"fillOpacity": 15, "lineWidth": 2, "spanNulls": true},
+          "unit": "s"
+        }
+      },
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 14},
+      "id": 7,
+      "options": {"legend": {"calcs": ["mean", "max", "p95"], "displayMode": "table", "placement": "bottom"}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "targets": [{"datasource": {"type": "prometheus", "uid": "${datasource}"}, "expr": "histogram_quantile(0.50, sum(rate(pipeline_stage_duration_seconds_bucket[1h])) by (le, stage))", "legendFormat": "{{stage}} p50", "refId": "A"}],
+      "title": "流水线各阶段耗时 (P50)",
+      "type": "bargauge"
+    }
+  ],
+  "refresh": "10s",
+  "schemaVersion": 39,
+  "tags": ["ai-native", "gates", "sla"],
+  "templating": {
+    "list": [
+      {"current": {"text": "Prometheus", "value": "Prometheus"}, "hide": 0, "label": "Datasource", "name": "datasource", "query": "prometheus", "type": "datasource"}
+    ]
+  },
+  "time": {"from": "now-6h", "to": "now"},
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "AI Native — Gate SLA & 审批监控",
+  "uid": "ai-native-gate-sla",
+  "version": 1
+}

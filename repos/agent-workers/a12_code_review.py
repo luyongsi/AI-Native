@@ -1,14 +1,13 @@
 """
 A12: Code Review Agent (代码审查)
 
-真实 LLM: 调用 DeepSeek API 进行代码审查
+真实 LLM: 通过统一的 self.call_llm() 进行代码审查
 触发: test.passed (A11 测试通过后触发)
 审查包括: 跨模块影响分析、代码规范检查、安全问题、自动修复建议
 """
 import asyncio
 import json
 import logging
-import os
 from datetime import datetime, timezone
 
 from base_worker import BaseAgentWorker
@@ -17,11 +16,6 @@ logger = logging.getLogger(__name__)
 
 AGENT_ID = "A12"
 AGENT_TYPE = "code_review"
-
-DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
-DEEPSEEK_BASE_URL = os.environ.get("DEEPSEEK_BASE_URL", "https://uniapi.ruijie.com.cn")
-DEEPSEEK_MODEL = os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-pro-202606")
-
 
 class CodeReviewAgent(BaseAgentWorker):
     """A12: 代码审查 Agent — LLM 驱动"""
@@ -59,23 +53,6 @@ class CodeReviewAgent(BaseAgentWorker):
         except Exception as e:
             logger.error(f"[A12] Review failed: {e}")
 
-    async def _call_llm(self, messages: list, temperature: float = 0.2) -> str | None:
-        if not DEEPSEEK_API_KEY:
-            return None
-        try:
-            import httpx
-            async with httpx.AsyncClient(timeout=120.0) as client:
-                resp = await client.post(
-                    f"{DEEPSEEK_BASE_URL}/v1/chat/completions",
-                    headers={"Authorization": f"Bearer {DEEPSEEK_API_KEY}", "Content-Type": "application/json"},
-                    json={"model": DEEPSEEK_MODEL, "messages": messages, "temperature": temperature, "max_tokens": 3000},
-                )
-                resp.raise_for_status()
-                return resp.json()["choices"][0]["message"]["content"]
-        except Exception as e:
-            logger.error(f"[A12] LLM call failed: {e}")
-            return None
-
     async def execute(self, req_id: str, context_package: dict) -> dict:
         test_result = context_package
         code_diff = test_result.get("code_diff", test_result.get("payload", {}))
@@ -105,7 +82,12 @@ class CodeReviewAgent(BaseAgentWorker):
 检查: SQL注入、XSS、CSRF、硬编码密钥、不安全加密、空指针、未处理异常、类型安全、代码规范
 只输出 JSON"""
 
-        content = await self._call_llm([{"role": "user", "content": prompt}], temperature=0.1)
+        content = await self.call_llm([{"role": "user", "content": prompt}],
+            task_type="code_review",
+            max_tokens=2000,
+            req_id=req_id,
+            temperature=0.1,
+        )
 
         if content:
             try:

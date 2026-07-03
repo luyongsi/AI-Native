@@ -1,0 +1,26 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://ai-native.dev/schemas/artifact-produced.schema.json",
+  "title": "Artifact Produced Event",
+  "description": "Event emitted when an artifact is produced",
+  "type": "object",
+  "required": ["event_id", "event_type", "timestamp", "artifact"],
+  "properties": {
+    "event_id": { "type": "string", "format": "uuid" },
+    "event_type": { "type": "string", "const": "artifact.produced" },
+    "timestamp": { "type": "string", "format": "date-time" },
+    "req_id": { "type": "string" },
+    "agent_id": { "type": "string" },
+    "artifact": {
+      "type": "object",
+      "required": ["id", "type"],
+      "properties": {
+        "id": { "type": "string" },
+        "type": { "type": "string" },
+        "format": { "type": "string" },
+        "location": { "type": "string" },
+        "metadata": { "type": "object" }
+      }
+    }
+  }
+}

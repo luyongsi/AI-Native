@@ -1,0 +1,110 @@
+# MCP Gateway Configuration
+
+listen_port: 8081
+
+# JWT key paths (auto-generated temp keys if not found)
+jwt_public_key_path: ./keys/jwt_public.pem
+jwt_private_key_path: ./keys/jwt_private.pem
+
+# Backend service routing table (mocked during development)
+backend_services:
+  code_review:
+    url: http://localhost:9001/tools/code_review
+    timeout: 30s
+  code_generation:
+    url: http://localhost:9002/tools/code_generation
+    timeout: 60s
+  code_explanation:
+    url: http://localhost:9003/tools/code_explanation
+    timeout: 30s
+  code_refactoring:
+    url: http://localhost:9004/tools/code_refactoring
+    timeout: 30s
+  bug_fix:
+    url: http://localhost:9005/tools/bug_fix
+    timeout: 30s
+  test_generation:
+    url: http://localhost:9006/tools/test_generation
+    timeout: 30s
+  documentation_generation:
+    url: http://localhost:9007/tools/documentation_generation
+    timeout: 30s
+  api_design:
+    url: http://localhost:9008/tools/api_design
+    timeout: 30s
+  database_schema_design:
+    url: http://localhost:9009/tools/database_schema_design
+    timeout: 30s
+  architecture_review:
+    url: http://localhost:9010/tools/architecture_review
+    timeout: 60s
+  devops_pipeline:
+    url: http://localhost:9011/tools/devops_pipeline
+    timeout: 30s
+  docker_compose:
+    url: http://localhost:9012/tools/docker_compose
+    timeout: 30s
+  kubernetes_manifests:
+    url: http://localhost:9013/tools/kubernetes_manifests
+    timeout: 30s
+  security_audit:
+    url: http://localhost:9014/tools/security_audit
+    timeout: 60s
+  performance_optimization:
+    url: http://localhost:9015/tools/performance_optimization
+    timeout: 60s
+  data_analysis:
+    url: http://localhost:9016/tools/data_analysis
+    timeout: 60s
+  data_visualization:
+    url: http://localhost:9017/tools/data_visualization
+    timeout: 30s
+  ml_model_training:
+    url: http://localhost:9018/tools/ml_model_training
+    timeout: 120s
+  prompt_engineering:
+    url: http://localhost:9019/tools/prompt_engineering
+    timeout: 30s
+  rag_pipeline:
+    url: http://localhost:9020/tools/rag_pipeline
+    timeout: 60s
+  debugging_assistant:
+    url: http://localhost:9021/tools/debugging_assistant
+    timeout: 30s
+  shell_scripting:
+    url: http://localhost:9022/tools/shell_scripting
+    timeout: 30s
+  config_management:
+    url: http://localhost:9023/tools/config_management
+    timeout: 30s
+  regex_generation:
+    url: http://localhost:9024/tools/regex_generation
+    timeout: 30s
+  git_operations:
+    url: http://localhost:9025/tools/git_operations
+    timeout: 30s
+  dependency_analysis:
+    url: http://localhost:9026/tools/dependency_analysis
+    timeout: 30s
+  log_analysis:
+    url: http://localhost:9027/tools/log_analysis
+    timeout: 30s
+  i18n_l10n:
+    url: http://localhost:9028/tools/i18n_l10n
+    timeout: 30s
+  ui_ux_review:
+    url: http://localhost:9029/tools/ui_ux_review
+    timeout: 30s
+  data_migration:
+    url: http://localhost:9030/tools/data_migration
+    timeout: 60s
+  project_scaffolding:
+    url: http://localhost:9031/tools/project_scaffolding
+    timeout: 30s
+
+# Rate limit settings
+rate_limit:
+  max_requests_per_minute: 100
+
+# Development mode (true = mock responses, false = real backends)
+dev_mode: true

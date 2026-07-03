@@ -1,0 +1,23 @@
+[mutmut]
+# Paths to mutate (source code)
+paths_to_mutate=src/
+
+# Test directory
+tests_dir=tests/
+
+# Test runner command
+runner=python -m pytest
+
+# Exclude patterns
+exclude_lines=
+    pragma: no cover
+    def __repr__
+    raise AssertionError
+    raise NotImplementedError
+    if __name__ == .__main__.:
+
+# Timeout for each mutation (seconds)
+timeout=10
+
+# Show progress
+show_progress=True

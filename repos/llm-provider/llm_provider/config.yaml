@@ -1,0 +1,37 @@
+# LLM Provider Abstraction Layer - Configuration
+
+llm_provider:
+  version: "0.1.0"
+
+  routing:
+    text: deepseek
+    vision: glm
+    embedding: qwen
+    dev_agent: anthropic
+
+  fallback:
+    vision:
+      - qwen
+
+  providers:
+    glm:
+      base_url: "https://open.bigmodel.cn/api/paas/v4"
+      default_model: "glm-4.6v"
+      env_api_key: "GLM_API_KEY"
+
+    deepseek:
+      base_url: "https://uniapi.ruijie.com.cn"
+      default_model: "deepseek-v4-pro-202606"
+      env_api_key: "DEEPSEEK_API_KEY"
+
+    qwen:
+      base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+      default_chat_model: "qwen-plus"
+      default_vision_model: "qwen-vl-plus"
+      default_embed_model: "text-embedding-v3"
+      env_api_key: "QWEN_API_KEY"
+
+    anthropic:
+      base_url: "https://api.anthropic.com"
+      default_model: "claude-sonnet-4-20250514"
+      env_api_key: "ANTHROPIC_API_KEY"

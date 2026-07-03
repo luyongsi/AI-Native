@@ -3,6 +3,7 @@ Mission Control Backend - Main Application Entry Point
 FastAPI app that mounts all API routers, connects to NATS + PostgreSQL on startup.
 
 Phase 5.3: Observability — integrated mc_observability middleware + metrics.
+Phase 5.4: Distributed Tracing — integrated OpenTelemetry + Jaeger backend.
 """
 import asyncio
 import os
@@ -27,6 +28,19 @@ from mc_observability import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Initialize OpenTelemetry tracing
+try:
+    from infra.observability.otel_config import init_tracer, shutdown_tracer
+    from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+    from opentelemetry.instrumentation.asyncpg import AsyncPGInstrumentor
+    _HAS_OTEL = True
+except ImportError:
+    _HAS_OTEL = False
+    logger.warning("OpenTelemetry not available, tracing disabled")
+
+    async def shutdown_tracer():
+        pass
 
 # Global connection pool and NATS client
 DB_POOL: asyncpg.Pool | None = None
@@ -103,6 +117,15 @@ async def metrics_collector_loop():
 async def lifespan(app: FastAPI):
     # Startup
     global REDIS_CLIENT
+
+    # Initialize OpenTelemetry tracing
+    if _HAS_OTEL:
+        try:
+            init_tracer("mc-backend", environment=os.environ.get("ENVIRONMENT", "dev"))
+            logger.info("OpenTelemetry tracer initialized for mc-backend")
+        except Exception as e:
+            logger.warning(f"Failed to initialize OpenTelemetry: {e}")
+
     await start_db()
     await start_nats()
     from ws.ws_gateway import init_redis
@@ -125,6 +148,10 @@ async def lifespan(app: FastAPI):
     await stop_nats()
     await stop_db()
 
+    # Shutdown OpenTelemetry tracing
+    if _HAS_OTEL:
+        await shutdown_tracer()
+
 
 app = FastAPI(title="Mission Control Backend", version="0.1.0", lifespan=lifespan)
 
@@ -138,6 +165,20 @@ app.add_middleware(
 # Observability middleware (request latency + structured logging)
 setup_observability(app)
 
+# OpenTelemetry auto-instrumentation for FastAPI
+if _HAS_OTEL:
+    try:
+        FastAPIInstrumentor.instrument_app(app)
+        logger.info("FastAPI instrumentation enabled")
+        # Instrument asyncpg if available
+        try:
+            AsyncPGInstrumentor().instrument()
+            logger.info("AsyncPG instrumentation enabled")
+        except Exception as e:
+            logger.debug(f"AsyncPG instrumentation skipped: {e}")
+    except Exception as e:
+        logger.warning(f"Failed to instrument FastAPI: {e}")
+
 # Mount API routers
 from api.dashboard import router as dashboard_router
 from api.requirements import router as requirements_router
@@ -145,6 +186,8 @@ from api.agents import router as agents_router
 from api.approvals import router as approvals_router
 from api.tests import router as tests_router
 from api.insights import router as insights_router
+from api.activity_stream import router as activity_stream_router
+from api.prototypes import router as prototypes_router
 from ws.ws_gateway import router as ws_router
 from api.workflow import router as workflow_router
 
@@ -154,15 +197,21 @@ app.include_router(agents_router)
 app.include_router(approvals_router)
 app.include_router(tests_router)
 app.include_router(insights_router)
+app.include_router(activity_stream_router)
+app.include_router(prototypes_router)
 app.include_router(ws_router)
 app.include_router(workflow_router)
 
-# Optional Phase 4 routers
+# Optional Phase 4 + Phase 5 routers (knowledge graph, topology, etc.)
 optional_routers = {
-    "topology": "api.topology", "releases": "api.releases",
-    "alerts": "api.alerts", "notifications": "api.notifications",
-    "knowledge": "api.knowledge", "chat_spec": "api.chat_spec",
+    "topology": "api.topology",
+    "releases": "api.releases",
+    "alerts": "api.alerts",
+    "notifications": "api.notifications",
+    "knowledge": "api.knowledge",
+    "chat_spec": "api.chat_spec",
     "test_cases": "api.test_cases",
+    "knowledge_topology": "api.knowledge_topology",  # Neo4j K14/K15 integration
 }
 for name, module_path in optional_routers.items():
     try:

@@ -1,0 +1,18 @@
+[Unit]
+Description=AI Native Backend (FastAPI uvicorn)
+After=network.target docker.service postgresql.service
+Requires=docker.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/ai-native/repos/mc-backend
+EnvironmentFile=/etc/ai-native.env
+ExecStart=/usr/local/bin/uvicorn main:app --host 0.0.0.0 --port 8000
+Restart=always
+RestartSec=5
+StandardOutput=append:/var/log/ai-native-backend.log
+StandardError=append:/var/log/ai-native-backend.log
+
+[Install]
+WantedBy=multi-user.target

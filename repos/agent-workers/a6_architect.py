@@ -22,6 +22,7 @@ Triggered by:
 import asyncio
 import json
 import logging
+import os
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
@@ -34,11 +35,17 @@ except ImportError:
 from a6.dependency_analyzer import DependencyAnalyzer
 from a6.dag_builder import DAGBuilder
 from a6.complexity_estimator import ComplexityEstimator
+from k14.dependency_topology import DependencyTopology
 
 logger = logging.getLogger(__name__)
 
 AGENT_ID = "A6"
 AGENT_TYPE = "architect"
+
+# Neo4j configuration
+NEO4J_URI = os.getenv("NEO4J_URI", "neo4j://172.27.78.109:7687")
+NEO4J_USER = os.getenv("NEO4J_USER", "neo4j")
+NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "ai-native-2026")
 
 
 class A6Architect:
@@ -57,6 +64,18 @@ class A6Architect:
         self.analyzer = DependencyAnalyzer()
         self.dag_builder = DAGBuilder(max_parallel_agents=5, max_dag_depth=4)
         self.complexity_estimator = ComplexityEstimator()
+
+        # Initialize K14 Dependency Topology (Neo4j integration)
+        try:
+            self.topology = DependencyTopology(
+                uri=NEO4J_URI,
+                user=NEO4J_USER,
+                password=NEO4J_PASSWORD
+            )
+            logger.info("[A6] K14 DependencyTopology initialized successfully")
+        except Exception as e:
+            logger.warning(f"[A6] Failed to initialize K14: {str(e)}")
+            self.topology = None
 
         logger.info("A6 Architect initialized")
 
@@ -135,6 +154,29 @@ class A6Architect:
                 dag_result["has_cycles"]
             )
 
+            # Phase 3.5: Build Neo4j dependency topology (K14 integration)
+            if self.topology:
+                logger.info("[A6] Phase 3.5: Building Neo4j topology (K14)")
+                topology_result = await self.topology.build_topology(
+                    req_id=req_id,
+                    api_schema=api_schema,
+                    erd=erd,
+                    requirement_context={
+                        "title": requirement.get("title", f"Requirement {req_id}"),
+                        "description": requirement.get("description", ""),
+                        "complexity": requirement.get("complexity", "medium"),
+                        "status": "active",
+                    }
+                )
+                logger.info(
+                    "[A6] Neo4j topology built: %s (nodes=%d, edges=%d)",
+                    topology_result.get("status"),
+                    topology_result.get("nodes_created", 0),
+                    topology_result.get("edges_created", 0)
+                )
+                if topology_result.get("status") != "completed":
+                    logger.warning(f"[A6] Neo4j topology build incomplete: {topology_result.get('error')}")
+
             # Phase 4: Detect and report issues
             if dag_result["has_cycles"]:
                 logger.error(
@@ -203,6 +245,13 @@ class A6Architect:
                 "req_id": req_id,
                 "error": str(e),
             }
+        finally:
+            # Clean up Neo4j connection if needed
+            if self.topology:
+                try:
+                    await self.topology.close()
+                except Exception as e:
+                    logger.warning(f"[A6] Error closing Neo4j connection: {str(e)}")
 
     async def _store_dag(
         self,

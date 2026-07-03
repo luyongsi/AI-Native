@@ -222,7 +222,7 @@ class CoderModule:
             from a9_claude_code_bridge import ClaudeCodeBridge
 
             bridge = ClaudeCodeBridge()
-            result = await bridge.execute_task(task_spec, work_dir=worktree_path)
+            result = await bridge.execute_task(task_spec, work_dir=worktree_path, req_id="")
 
             files_changed = result.get("files_changed", [])
             logger.info(f"[Coder] LLM generated {len(files_changed)} files")
