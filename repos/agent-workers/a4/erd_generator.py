@@ -14,16 +14,12 @@ import logging
 import os
 import asyncio
 import re
-from typing import Optional, Dict, Any, List, Tuple
+from typing import Optional, Dict, Any, List, Tuple, Callable
 from datetime import datetime, timezone
 
 from .ddl_validator import DDLValidator
 
 logger = logging.getLogger(__name__)
-
-DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
-DEEPSEEK_BASE_URL = os.environ.get("DEEPSEEK_BASE_URL", "https://uniapi.ruijie.com.cn")
-DEEPSEEK_MODEL = os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-pro-202606")
 
 
 class ERDGenerator:
@@ -180,8 +176,10 @@ class ERDGenerator:
         },
     ]
 
-    def __init__(self):
+    def __init__(self, llm_caller: Callable | None = None):
         self.validator = DDLValidator()
+        self._llm = llm_caller  # external call_llm injected by A4SpecWriter
+        self._context: Dict[str, Any] = {}
 
     async def generate(
         self,
@@ -205,6 +203,7 @@ class ERDGenerator:
             A dict with erd_mermaid, ddl, entities, relationships, and metadata.
         """
         context = context or {}
+        self._context = context
         title = context.get("title", "Generated Database")
         domain = context.get("domain", "general")
         existing_tables = existing_tables or []
@@ -401,7 +400,22 @@ JSON SCHEMA:
         return examples_text
 
     async def _call_llm(self, prompt: str) -> Optional[str]:
-        """Call the LLM API."""
+        """Call the LLM API via the injected callable (or fallback to direct httpx)."""
+        if self._llm:
+            try:
+                return await self._llm(
+                    [{"role": "user", "content": prompt}],
+                    task_type="erd_gen",
+                    temperature=0.2,
+                    max_tokens=3000,
+                    req_id=self._context.get("req_id", ""),
+                    workflow_id=self._context.get("workflow_id", ""),
+                )
+            except Exception as e:
+                logger.error(f"Injected LLM call failed: {e}")
+
+        # Fallback: direct call (only if no callable injected, transitional)
+        DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
         if not DEEPSEEK_API_KEY:
             logger.warning("DEEPSEEK_API_KEY not configured, LLM call skipped")
             return None
@@ -411,13 +425,13 @@ JSON SCHEMA:
 
             async with httpx.AsyncClient(timeout=120.0) as client:
                 resp = await client.post(
-                    f"{DEEPSEEK_BASE_URL}/v1/chat/completions",
+                    f"{os.environ.get('DEEPSEEK_BASE_URL', 'https://uniapi.ruijie.com.cn')}/v1/chat/completions",
                     headers={
                         "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
                         "Content-Type": "application/json",
                     },
                     json={
-                        "model": DEEPSEEK_MODEL,
+                        "model": os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-pro-202606"),
                         "messages": [{"role": "user", "content": prompt}],
                         "temperature": 0.2,
                         "max_tokens": 6000,

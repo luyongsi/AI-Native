@@ -17,10 +17,6 @@ from base_worker import BaseAgentWorker
 
 logger = logging.getLogger(__name__)
 
-DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
-DEEPSEEK_BASE_URL = os.environ.get("DEEPSEEK_BASE_URL", "https://uniapi.ruijie.com.cn")
-DEEPSEEK_MODEL = os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-pro-202606")
-
 # Fallback 关键词映射
 DOMAIN_KEYWORDS = {
     "下单": "order_management", "订单": "order_management",
@@ -46,34 +42,6 @@ class A1RequirementIntake(BaseAgentWorker):
     def __init__(self, nats_url: str = "nats://localhost:4222"):
         super().__init__(self.agent_id, self.agent_type, nats_url)
 
-    async def _call_llm(self, messages: list, temperature: float = 0.3) -> str | None:
-        """Call DeepSeek LLM via HTTP API."""
-        if not DEEPSEEK_API_KEY:
-            logger.warning("[A1] DEEPSEEK_API_KEY not set, using fallback")
-            return None
-        try:
-            import httpx
-            async with httpx.AsyncClient(timeout=60.0) as client:
-                resp = await client.post(
-                    f"{DEEPSEEK_BASE_URL}/v1/chat/completions",
-                    headers={
-                        "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
-                        "Content-Type": "application/json",
-                    },
-                    json={
-                        "model": DEEPSEEK_MODEL,
-                        "messages": messages,
-                        "temperature": temperature,
-                        "max_tokens": 2000,
-                    },
-                )
-                resp.raise_for_status()
-                data = resp.json()
-                return data["choices"][0]["message"]["content"]
-        except Exception as e:
-            logger.error(f"[A1] LLM call failed: {e}")
-            return None
-
     async def execute(self, req_id: str, context_package: dict) -> dict:
         raw_message = context_package.get("message", "")
         if not raw_message:
@@ -85,7 +53,7 @@ class A1RequirementIntake(BaseAgentWorker):
 
         # Phase 1: 尝试 LLM 分析
         await self.report_status(req_id, "running", "Phase 1: LLM 需求分析")
-        llm_result = await self._analyze_with_llm(raw_message)
+        llm_result = await self._analyze_with_llm(raw_message, req_id, context_package.get("workflow_id", ""))
 
         if llm_result:
             logger.info("[A1] Using LLM-generated analysis")
@@ -108,7 +76,7 @@ class A1RequirementIntake(BaseAgentWorker):
             "source": "llm" if llm_result else "keyword_fallback",
         }
 
-    async def _analyze_with_llm(self, message: str) -> dict | None:
+    async def _analyze_with_llm(self, message: str, req_id: str = "", workflow_id: str = "") -> dict | None:
         """使用 DeepSeek LLM 分析需求并生成结构化草案"""
         system_prompt = """你是一个需求分析师。分析用户的需求描述，输出 JSON 格式的结构化需求草案。
 
@@ -126,10 +94,16 @@ class A1RequirementIntake(BaseAgentWorker):
 
 只输出 JSON，不要其他内容。"""
 
-        content = await self._call_llm([
+        content = await self.call_llm([
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": message},
-        ], temperature=0.3)
+        ],
+            task_type="requirement_analysis",
+            req_id=req_id,
+            workflow_id=workflow_id,
+            temperature=0.3,
+            max_tokens=2000,
+        )
 
         if not content:
             return None

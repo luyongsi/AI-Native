@@ -24,10 +24,6 @@ import asyncpg
 
 logger = logging.getLogger(__name__)
 
-DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
-DEEPSEEK_BASE_URL = os.environ.get("DEEPSEEK_BASE_URL", "https://uniapi.ruijie.com.cn")
-DEEPSEEK_MODEL = os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-pro-202606")
-
 
 class DesignReviewAgent(BaseAgentWorker):
     agent_id = "A5"
@@ -63,23 +59,6 @@ class DesignReviewAgent(BaseAgentWorker):
         finally:
             await conn.close()
 
-    async def _call_llm(self, messages: list, temperature: float = 0.3) -> str | None:
-        if not DEEPSEEK_API_KEY:
-            return None
-        try:
-            import httpx
-            async with httpx.AsyncClient(timeout=180.0) as client:
-                resp = await client.post(
-                    f"{DEEPSEEK_BASE_URL}/v1/chat/completions",
-                    headers={"Authorization": f"Bearer {DEEPSEEK_API_KEY}", "Content-Type": "application/json"},
-                    json={"model": DEEPSEEK_MODEL, "messages": messages, "temperature": temperature, "max_tokens": 3000},
-                )
-                resp.raise_for_status()
-                return resp.json()["choices"][0]["message"]["content"]
-        except Exception as e:
-            logger.error(f"[A5] LLM call failed: {e}")
-            return None
-
     async def execute(self, req_id: str, context_package: dict) -> dict:
         """核心逻辑: 读取 Spec → 调用 LLM 做三方面评审 → 汇总 → 发布 review.completed"""
         logger.info(f"[A5] Starting design review for req={req_id}")
@@ -89,15 +68,40 @@ class DesignReviewAgent(BaseAgentWorker):
         spec = db_data.get("spec", {})
         title = db_data.get("title", "未命名需求")
 
-        # Build spec summary for LLM
+        # Build spec summary for LLM — adapt to A4's actual output structure:
+        # A4 writes: {openapi: {openapi, schema: {info, paths, components}}, erd: {erd_mermaid, ddl, entities, relationships}}
+        # A5 needs: section_text, openapi_text, erd_text
         sections = spec.get("sections", spec.get("spec_sections", []))
-        section_text = "\n\n".join(
-            f"## {s.get('title','')}\n{s.get('content','')[:500]}"
-            for s in sections[:10]
-        ) if sections else json.dumps(spec.get("openapi", {}), ensure_ascii=False)[:2000]
+        openapi_spec = spec.get("openapi", {})
+        erd_spec = spec.get("erd", {})
 
-        openapi_text = json.dumps(spec.get("openapi", {}), ensure_ascii=False, indent=2)[:1500]
-        erd_text = json.dumps(spec.get("erd", {}), ensure_ascii=False, indent=2)[:1000]
+        # Build section_text from sections first, then fallback to openapi schema info
+        if sections:
+            section_text = "\n\n".join(
+                f"## {s.get('title','')}\n{s.get('content','')[:500]}"
+                for s in sections[:10]
+            )
+        else:
+            # A4 writes openapi.schema with the actual spec
+            api_schema = openapi_spec.get("schema", openapi_spec)
+            section_text = json.dumps({
+                "info": api_schema.get("info", {}),
+                "endpoints": list(api_schema.get("paths", {}).keys()),
+            }, ensure_ascii=False)[:2000]
+
+        # Extract actual API paths from A4's nested structure
+        if api_schema and api_schema is not openapi_spec:
+            paths = api_schema.get("paths", {})
+        else:
+            paths = openapi_spec.get("paths", {})
+        openapi_text = json.dumps(paths, ensure_ascii=False, indent=2)[:2000]
+
+        # Extract tables/entities from A4's ERD structure
+        erd_tables = erd_spec.get("entities", erd_spec.get("tables", []))
+        erd_text = json.dumps({
+            "entities": erd_tables,
+            "relationships": erd_spec.get("relationships", []),
+        }, ensure_ascii=False, indent=2)[:1500]
 
         await self.report_status(req_id, "running", "Phase 1: LLM 设计评审")
 
@@ -148,7 +152,13 @@ class DesignReviewAgent(BaseAgentWorker):
 - 业务: 检查鉴权授权、输入校验、异常处理、边界条件、审计日志等是否完整
 - 如果 Spec 不够详细导致某些维度无法评审，应给出较低分数并说明需要补充的信息"""
 
-        content = await self._call_llm([{"role": "user", "content": review_prompt}], temperature=0.2)
+        content = await self.call_llm([{"role": "user", "content": review_prompt}],
+            task_type="design_review",
+            req_id=req_id,
+            workflow_id=context_package.get("workflow_id", ""),
+            temperature=0.2,
+            max_tokens=3000,
+        )
 
         if content:
             try:
@@ -224,24 +234,17 @@ class DesignReviewAgent(BaseAgentWorker):
         for issue in summary.get("issues", [])[:5]:
             logger.info(f"[A5] Issue: {issue.get('severity','?')} - {issue.get('description','')[:100]}")
 
-        # Publish review.completed event to NATS
-        envelope = {
-            "event_id": f"review-completed-{req_id}",
-            "event_type": "review.completed",
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "payload": summary,
-            "req_id": req_id,
-            "agent_id": self.agent_id,
-        }
-        await self.nc.publish("review.completed", json.dumps(envelope, ensure_ascii=False).encode())
-        logger.info(f"[A5] Published review.completed for req={req_id}, pass={summary['pass']}")
-
         return {"status": "completed" if summary["pass"] else "failed", **summary}
 
     def _fallback_review(self, spec: dict, title: str) -> dict:
         """Fallback review when LLM is unavailable."""
         sections = spec.get("sections", spec.get("spec_sections", []))
-        has_content = len(sections) > 0 and any(s.get("content", "").strip() for s in sections)
+        openapi_spec = spec.get("openapi", {})
+        erd_spec = spec.get("erd", {})
+        api_schema = openapi_spec.get("schema", openapi_spec)
+        has_paths = bool(api_schema.get("paths"))
+        has_entities = bool(erd_spec.get("entities", erd_spec.get("tables", [])))
+        has_content = len(sections) > 0 or has_paths or has_entities
         if has_content:
             return {
                 "ux_review": {"score": 75, "passed": True, "findings": [{"severity": "minor", "heuristic": "一致性", "description": "Spec 内容基本完整，建议补充交互状态定义", "suggestion": "补充 loading/error/empty 状态描述"}]},

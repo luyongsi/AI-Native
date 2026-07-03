@@ -22,10 +22,6 @@ import asyncpg
 
 logger = logging.getLogger(__name__)
 
-DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
-DEEPSEEK_BASE_URL = os.environ.get("DEEPSEEK_BASE_URL", "https://uniapi.ruijie.com.cn")
-DEEPSEEK_MODEL = os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-pro-202606")
-
 
 class A4SpecWriter(BaseAgentWorker):
     agent_id = "A4"
@@ -34,8 +30,8 @@ class A4SpecWriter(BaseAgentWorker):
     def __init__(self, nats_url: str = "nats://localhost:4222"):
         super().__init__(self.agent_id, self.agent_type, nats_url)
         self._db_pool = None
-        self.api_schema_gen = APISchemaGenerator()
-        self.erd_gen = ERDGenerator()
+        self.api_schema_gen = APISchemaGenerator(llm_caller=self.call_llm)
+        self.erd_gen = ERDGenerator(llm_caller=self.call_llm)
 
     async def _get_db(self):
         if self._db_pool is None:
@@ -200,6 +196,8 @@ class A4SpecWriter(BaseAgentWorker):
                 "title": title,
                 "domain": domain,
                 "acceptance_criteria": draft.get("acceptance_criteria", []),
+                "req_id": req_id,
+                "workflow_id": context_package.get("workflow_id", ""),
             },
             max_retries=3,
         )
@@ -209,6 +207,8 @@ class A4SpecWriter(BaseAgentWorker):
             context={
                 "title": title,
                 "domain": domain,
+                "req_id": req_id,
+                "workflow_id": context_package.get("workflow_id", ""),
             },
             existing_tables=existing_tables,
             max_retries=3,
@@ -242,29 +242,6 @@ class A4SpecWriter(BaseAgentWorker):
             "erd_source": erd_result.get("source", "unknown"),
             "is_incremental_schema": erd_result.get("is_incremental", False),
         }
-
-        # After A4 completes, trigger A5 design review
-        review_envelope = {
-            "event_id": f"review-start-{req_id}",
-            "event_type": "review.start",
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "payload": {
-                "req_id": req_id,
-                "gate": 1,
-                "spec_package": {
-                    "openapi": api_schema_result.get("schema", {}),
-                    "erd": {
-                        "mermaid": erd_result.get("erd_mermaid", ""),
-                        "ddl": erd_result.get("ddl", ""),
-                        "entities": erd_result.get("entities", []),
-                        "relationships": erd_result.get("relationships", []),
-                    }
-                }
-            },
-            "req_id": req_id,
-        }
-        await self.nc.publish("review.start", json.dumps(review_envelope, ensure_ascii=False).encode())
-        logger.info(f"[A4] Triggered review.start for req={req_id}")
 
         return result
 
