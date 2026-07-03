@@ -89,6 +89,18 @@ class DesignReviewAgent(BaseAgentWorker):
                 "endpoints": list(api_schema.get("paths", {}).keys()),
             }, ensure_ascii=False)[:2000]
 
+        # Extract openapi_text from A4's structure
+        api_schema = openapi_spec.get("schema", {})
+        if api_schema and api_schema.get("paths"):
+            openapi_text = json.dumps({
+                "paths": {p: list(methods.keys()) for p, methods in api_schema.get("paths", {}).items()},
+                "schemas": list(api_schema.get("components", {}).get("schemas", {}).keys()),
+            }, ensure_ascii=False)[:2000]
+        elif openapi_spec.get("paths"):
+            openapi_text = json.dumps(openapi_spec, ensure_ascii=False)[:2000]
+        else:
+            openapi_text = json.dumps(openapi_spec, ensure_ascii=False)[:2000]
+
         # Extract actual API paths from A4's nested structure
         if api_schema and api_schema is not openapi_spec:
             paths = api_schema.get("paths", {})
