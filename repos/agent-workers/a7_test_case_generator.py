@@ -282,13 +282,10 @@ class TestCaseGeneratorAgent(BaseAgentWorker):
         return []
 
     async def _generate_with_llm(self, req_id: str, spec_text: str, dag_text: str, nodes: list, context_package: dict) -> list | None:
+        context_text = await self.prepare_llm_context(context_package, state="testing")
         prompt = f"""你是测试工程师。根据以下 Spec 和 DAG 任务，生成完整的测试用例。
 
-## 需求 Spec
-{spec_text[:3000]}
-
-## DAG 任务节点
-{dag_text[:2000]}
+{context_text}
 
 输出 JSON 数组（只输出 JSON, 不要 markdown）：
 [

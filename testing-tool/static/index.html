@@ -1,0 +1,561 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI Native Pipeline Test Dashboard</title>
+<style>
+  :root {
+    --bg: #0f1117;
+    --surface: #1a1d27;
+    --border: #2a2d3a;
+    --text: #e1e4e8;
+    --text-dim: #8b949e;
+    --green: #3fb950;
+    --red: #f85149;
+    --blue: #58a6ff;
+    --yellow: #d2991d;
+    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+    color: var(--text);
+    background: var(--bg);
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { max-width: 1300px; margin: 0 auto; padding: 20px; }
+  h1 { font-size: 1.4rem; margin-bottom: 4px; }
+  .subtitle { color: var(--text-dim); font-size: 0.85rem; margin-bottom: 16px; }
+
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 16px; margin-bottom: 14px; }
+  .card-header { font-weight: 600; margin-bottom: 10px; display: flex; align-items: center; gap: 8px; }
+
+  .status-bar { display: flex; gap: 10px; margin-bottom: 14px; flex-wrap: wrap; }
+  .status-item { padding: 6px 14px; border-radius: 6px; font-size: 0.85rem; background: var(--surface); border: 1px solid var(--border); }
+  .status-item.pass { border-color: var(--green); color: var(--green); }
+  .status-item.fail { border-color: var(--red); color: var(--red); }
+  .status-item.warn { border-color: var(--yellow); color: var(--yellow); }
+
+  .controls { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+  input, textarea { background: var(--bg); border: 1px solid var(--border); color: var(--text); padding: 8px 12px; border-radius: 6px; font-size: 0.9rem; }
+  input[type="text"] { width: 280px; }
+  textarea { width: 420px; height: 55px; resize: vertical; }
+  label { font-size: 0.85rem; color: var(--text-dim); display: flex; align-items: center; gap: 6px; cursor:pointer; }
+  button { background: var(--blue); color: #fff; border: none; padding: 8px 18px; border-radius: 6px; cursor: pointer; font-size: 0.9rem; font-weight: 500; }
+  button:hover { opacity: 0.85; }
+  button.stop { background: var(--red); }
+  button.small { padding: 4px 10px; font-size: 0.75rem; }
+  button.secondary { background: var(--border); color: var(--text); }
+
+  .flow { display: flex; flex-wrap: wrap; align-items: center; gap: 3px; margin: 8px 0; overflow-x: auto; padding-bottom: 6px; }
+  .node { padding: 8px 10px; border-radius: 8px; text-align: center; cursor: pointer; border: 2px solid var(--border); background: var(--bg); min-width: 68px; transition: all 0.2s; }
+  .node:hover { border-color: var(--blue); }
+  .node.completed { border-color: var(--green); }
+  .node.active { border-color: var(--blue); box-shadow: 0 0 14px rgba(88,166,255,0.35); }
+  .node.failed { border-color: var(--red); }
+  .node.pending { border-color: var(--border); opacity: 0.55; }
+  .node .icon { font-size: 1.0rem; }
+  .node .label { font-size: 0.7rem; font-weight: 600; margin-top: 1px; }
+  .node .detail { font-size: 0.65rem; color: var(--text-dim); }
+  .arrow { color: var(--text-dim); font-size: 1.0rem; }
+
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
+  .spinning { animation: pulse 1.0s infinite; }
+
+  .finding { padding: 8px 12px; border-radius: 6px; margin: 5px 0; border-left: 3px solid var(--border); cursor: pointer; }
+  .finding.error { border-left-color: var(--red); background: rgba(248,81,73,0.07); }
+  .finding.warning { border-left-color: var(--yellow); background: rgba(210,153,29,0.07); }
+  .finding.info { border-left-color: var(--blue); }
+  .finding .rule { font-weight: 600; font-size: 0.8rem; }
+  .finding .msg { font-size: 0.82rem; margin-top: 2px; }
+  .finding .meta { font-size: 0.72rem; color: var(--text-dim); margin-top: 3px; }
+  .finding .detail-panel { display: none; margin-top: 8px; padding: 8px; background: var(--bg); border-radius: 4px; font-size: 0.78rem; font-family: Consolas, monospace; white-space: pre-wrap; max-height: 280px; overflow-y: auto; }
+
+  .history-row { display: flex; gap: 14px; padding: 6px 0; border-bottom: 1px solid var(--border); font-size: 0.82rem; align-items: center; }
+  .hl-done { background: rgba(63,185,80,0.12); color: var(--green); padding: 2px 8px; border-radius: 4px; font-size: 0.72rem; }
+  .hl-blocked { background: rgba(248,81,73,0.12); color: var(--red); padding: 2px 8px; border-radius: 4px; font-size: 0.72rem; }
+
+  .tab-bar { display: flex; gap: 2px; margin-bottom: 8px; }
+  .tab { padding: 5px 14px; border-radius: 6px 6px 0 0; cursor: pointer; font-size: 0.82rem; border: 1px solid var(--border); border-bottom: none; background: var(--bg); }
+  .tab.active { background: var(--surface); color: var(--text); }
+  .tab:not(.active) { color: var(--text-dim); }
+
+  .json-view { font-family: Consolas, monospace; font-size: 0.78rem; white-space: pre-wrap; max-height: 350px; overflow-y: auto; background: var(--bg); border-radius: 4px; padding: 10px; }
+</style>
+</head>
+<body>
+
+<h1>AI Native Pipeline Test Dashboard</h1>
+<div class="subtitle" id="server-info">Loading...</div>
+
+<div class="status-bar" id="status-bar">
+  <div class="status-item" id="st-spec">⏳ Spec</div>
+  <div class="status-item" id="st-infra">⏳ Infra</div>
+  <div class="status-item" id="st-nats">⏳ NATS</div>
+  <div class="status-item" id="st-running">Idle</div>
+</div>
+
+<div class="card">
+  <div class="card-header">Test Controls</div>
+  <div class="controls">
+    <input type="text" id="inp-title" placeholder="Requirement title">
+    <textarea id="inp-desc" placeholder="Description (optional)"></textarea>
+    <select id="sel-preset" style="background:var(--bg);border:1px solid var(--border);color:var(--text);padding:8px 10px;border-radius:6px;">
+      <option value="">Presets...</option>
+      <option value="login">User Login</option>
+      <option value="order">Order Management</option>
+    </select>
+    <label><input type="radio" name="gate" value="auto" checked> Auto Gate</label>
+    <label><input type="radio" name="gate" value="manual"> Manual Gate</label>
+    <label><input type="checkbox" id="chk-keep"> Keep Data</label>
+    <button id="btn-run">▶ Run</button>
+    <button id="btn-stop" class="stop" style="display:none">■ Stop</button>
+    <button id="btn-cleanup" class="secondary">🧹 Clean</button>
+  </div>
+  <div style="margin-top:6px;font-size:0.78rem;color:var(--text-dim)">
+    <input type="text" id="inp-diagnose" placeholder="Diagnose req-id..." style="width:300px">
+    <button id="btn-diagnose" class="secondary" style="margin-left:6px">🔍 Diagnose</button>
+  </div>
+</div>
+
+<div class="card" id="flow-card">
+  <div class="card-header">Pipeline State Flow <span id="flow-timer" style="color:var(--text-dim);font-size:0.78rem;margin-left:auto"></span></div>
+  <div class="flow" id="flow-container">Run a test to see live state flow</div>
+  <div style="font-size:0.7rem;color:var(--text-dim);margin-top:4px">
+    ✓=Completed ◉=Active ○=Pending ✗=Failed — Click any node for detail
+  </div>
+</div>
+
+<div class="card" id="findings-card" style="display:none">
+  <div class="card-header">Findings <span id="findings-count"></span>
+    <div style="margin-left:auto;display:flex;gap:6px">
+      <button class="secondary small" onclick="filterFindings('all')">All</button>
+      <button class="secondary small" onclick="filterFindings('error')" style="color:var(--red)">Errors</button>
+      <button class="secondary small" onclick="filterFindings('warning')" style="color:var(--yellow)">Warnings</button>
+    </div>
+  </div>
+  <div id="findings-list"></div>
+</div>
+
+<div class="card" id="detail-card" style="display:none">
+  <div class="card-header" id="detail-title">Node Detail</div>
+  <div class="tab-bar">
+    <div class="tab active" onclick="switchDetailTab('input')">📥 Context Input</div>
+    <div class="tab" onclick="switchDetailTab('output')">📤 Agent Output</div>
+    <div class="tab" onclick="switchDetailTab('llm')">🤖 LLM Calls</div>
+    <div class="tab" onclick="switchDetailTab('db')">🗄 DB State</div>
+  </div>
+  <div id="detail-content"></div>
+</div>
+
+<div class="card">
+  <div class="card-header">Run History</div>
+  <div id="history-list">No runs yet</div>
+</div>
+
+<script>
+// ═══════════════════════════════════════════════════════════════════
+// State
+// ═══════════════════════════════════════════════════════════════════
+let currentRunId = null;
+let eventSource = null;
+let timeline = [];
+let findings = [];
+let config = {};
+let detailNode = null; // {state, agent, seq}
+let activeFilter = 'all';
+
+// ═══════════════════════════════════════════════════════════════════
+// Init
+// ═══════════════════════════════════════════════════════════════════
+async function init() {
+  document.getElementById('server-info').textContent =
+    `Server: ${window.location.hostname} · ${new Date().toISOString().slice(0,16)}`;
+  document.getElementById('inp-title').value = 'User login system';
+  document.getElementById('inp-desc').value = 'Implement username/password login with remember-me, password reset, and account lockout after 3 failed attempts';
+
+  document.getElementById('sel-preset').addEventListener('change', e => {
+    if (e.target.value === 'login') {
+      document.getElementById('inp-title').value = 'User login system';
+      document.getElementById('inp-desc').value = 'Implement username/password login with remember-me, password reset, and account lockout after 3 failed attempts';
+    } else if (e.target.value === 'order') {
+      document.getElementById('inp-title').value = 'Order management system';
+      document.getElementById('inp-desc').value = 'Implement order CRUD with status workflow, payment integration callback, and order history with pagination and filtering';
+    }
+  });
+
+  await loadStatus();
+  await loadConfig();
+  await loadHistory();
+  renderFlow();
+}
+
+async function loadStatus() {
+  const r = await fetch('/api/tests/status').then(r => r.json()).catch(() => null);
+  if (!r) return;
+  updateStatusItem('st-spec', r.spec_self_check?.passed, 'Spec');
+  const infraOk = Object.values(r.infra||{}).filter(v => v && typeof v === 'object').every(v => v.passed);
+  updateStatusItem('st-infra', infraOk, 'Infra');
+  updateStatusItem('st-nats', r.preflight?.ready, 'NATS');
+}
+
+function updateStatusItem(id, ok, label) {
+  const el = document.getElementById(id);
+  if (ok === null) { el.className = 'status-item'; el.textContent = label; return; }
+  el.className = `status-item ${ok ? 'pass' : 'fail'}`;
+  el.textContent = (ok ? '✓ ' : '✗ ') + label;
+}
+
+async function loadConfig() {
+  config = await fetch('/api/tests/derived-config').then(r => r.json());
+  // Normalize: ensure all state names are UPPERCASE for matching
+  if (config.transitions) config.transitions = upperKeys(config.transitions);
+  if (config.state_agents) config.state_agents = upperKeys(config.state_agents);
+  if (config.parallel_states) config.parallel_states = upperKeys(config.parallel_states);
+  if (config.gated_states) config.gated_states = upperKeys(config.gated_states);
+}
+
+function upperKeys(obj) {
+  if (!obj) return obj;
+  const out = {};
+  for (const [k, v] of Object.entries(obj)) out[k.toUpperCase()] = v;
+  return out;
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// State Flow
+// ═══════════════════════════════════════════════════════════════════
+function renderFlow() {
+  const container = document.getElementById('flow-container');
+  if (!config.transitions) { container.innerHTML = '<span style="color:var(--text-dim)">Loading config...</span>'; return; }
+
+  const order = buildStateOrder();
+  container.innerHTML = '';
+  const stateStatus = getStateStatuses();
+
+  order.forEach((state, idx) => {
+    const status = stateStatus[state] || 'pending';
+    const agent = config.state_agents?.[state] || '';
+    const icon = {completed:'✓',active:'◉',failed:'✗',pending:'○',warning:'⚠'}[status] || '○';
+    const cls = `node ${status}`;
+
+    const div = document.createElement('div');
+    div.className = cls;
+    div.title = 'Click for LLM input/output details';
+    div.onclick = () => showNodeDetail(state, agent);
+    div.innerHTML = `<div class="icon${status==='active'?' spinning':''}">${icon}</div><div class="label">${state}</div><div class="detail">${agent||''}</div>`;
+    container.appendChild(div);
+
+    if (config.gated_states?.[state] !== undefined) {
+      const g = config.gated_states[state];
+      const arrow = document.createElement('span');
+      arrow.className = 'arrow'; arrow.textContent = '→';
+      container.appendChild(arrow);
+
+      const gNode = document.createElement('div');
+      const gStatus = stateStatus[`GATE_${g.level}`] || 'pending';
+      gNode.className = `node ${gStatus}`;
+      gNode.innerHTML = `<div class="icon">${gStatus==='active'?'◉':gStatus==='completed'?'✓':'○'}</div><div class="label">Gate ${g.level}</div>`;
+      container.appendChild(gNode);
+    }
+
+    if (idx < order.length - 1) {
+      const arrow = document.createElement('span');
+      arrow.className = 'arrow'; arrow.textContent = '→';
+      container.appendChild(arrow);
+    }
+  });
+}
+
+function buildStateOrder() {
+  const order = ['DRAFT'];
+  const visited = new Set(['DRAFT']);
+  let ptr = 0;
+  while (ptr < order.length) {
+    const cur = order[ptr];
+    const nexts = config.transitions[cur] || [];
+    for (const s of nexts) {
+      if (s !== 'BLOCKED' && !visited.has(s)) { visited.add(s); order.push(s); }
+    }
+    ptr++;
+  }
+  return order;
+}
+
+function getStateStatuses() {
+  const map = {};
+  for (const e of timeline) {
+    const st = (e.state || e.new_state || '').toUpperCase();
+    if (!st) continue;
+    if (e.event_type === 'agent_completed') map[st] = 'completed';
+    else if (e.event_type === 'context_built' && map[st] !== 'completed') map[st] = 'active';
+    else if (e.event_type === 'state_transition' || e.event_type === 'state_changed') map[st] = 'completed';
+  }
+  if (timeline.length > 0) {
+    const last = timeline[timeline.length - 1];
+    const cur = (last.state || last.new_state || '').toUpperCase();
+    if (cur && !map[cur]) map[cur] = 'active';
+  }
+  return map;
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Node Detail (LLM Input/Output)
+// ═══════════════════════════════════════════════════════════════════
+function showNodeDetail(state, agent) {
+  detailNode = { state, agent };
+
+  // Find matching events from timeline
+  const ctxEvt = timeline.find(e =>
+    (e.state||'').toUpperCase() === state && e.event_type === 'context_built'
+      && (e.agent||'').toUpperCase() === agent.toUpperCase()
+  ) || timeline.find(e =>
+    (e.state||'').toUpperCase() === state && e.event_type === 'context_built'
+  );
+
+  const resultEvt = timeline.find(e =>
+    (e.state||'').toUpperCase() === state && e.event_type === 'agent_completed'
+      && (e.agent||'').toUpperCase() === agent.toUpperCase()
+  ) || timeline.find(e =>
+    (e.state||'').toUpperCase() === state && e.event_type === 'agent_completed'
+  );
+
+  // Also get DB snapshot if available
+  const dbEvt = timeline.find(e =>
+    (e.state||'').toUpperCase() === state && e.event_type === 'state_transition'
+  );
+
+  detailNode.ctxEvt = ctxEvt;
+  detailNode.resultEvt = resultEvt;
+  detailNode.dbEvt = dbEvt;
+
+  document.getElementById('detail-card').style.display = 'block';
+  document.getElementById('detail-title').textContent =
+    `Node: ${state} ${agent ? '(' + agent + ')' : ''}`;
+  document.getElementById('detail-card').scrollIntoView({behavior:'smooth'});
+
+  // Default to input tab
+  document.querySelectorAll('#detail-card .tab').forEach(t => t.classList.remove('active'));
+  document.querySelector('#detail-card .tab').classList.add('active');
+  renderDetailTab('input');
+}
+
+function switchDetailTab(tab) {
+  document.querySelectorAll('#detail-card .tab').forEach(t => t.classList.remove('active'));
+  event.target.classList.add('active');
+  renderDetailTab(tab);
+}
+
+function renderDetailTab(tab) {
+  const el = document.getElementById('detail-content');
+  if (!detailNode) { el.innerHTML = 'No node selected'; return; }
+
+  if (tab === 'input') {
+    const ctx = detailNode.ctxEvt?.data?.context_snapshot || {};
+    if (ctx._raw) {
+      // If context was stored as raw string
+      el.innerHTML = `<div class="json-view">${escapeHtml(ctx._raw)}</div>`;
+    } else {
+      delete ctx.db_snapshot;
+      el.innerHTML = `<div class="json-view">Context Snapshot (from NATS dispatch payload):\n\n${JSON.stringify(ctx, null, 2)}</div>`;
+    }
+    if (!detailNode.ctxEvt) el.innerHTML += '<div style="color:var(--text-dim);margin-top:8px">No context snapshot captured for this state. The NATS dispatch message was consumed by the Agent before the Observer could capture it.</div>';
+  } else if (tab === 'output') {
+    const res = detailNode.resultEvt?.data?.result || {};
+    el.innerHTML = `<div class="json-view">Agent Output:\n\n${JSON.stringify(res, null, 2)}</div>`;
+    if (!detailNode.resultEvt) el.innerHTML += '<div style="color:var(--text-dim);margin-top:8px">No agent output captured yet.</div>';
+  } else if (tab === 'llm') {
+    el.innerHTML = '<div style="color:var(--text-dim)">LLM call details are available on the server at <code>/opt/ai-native/logs/llm_calls/</code>. View them via:<br><br>1. SSH to server<br>2. <code>python3 /opt/ai-native/testing-tool/view_llm_calls.py --agent ' + (detailNode.agent||'A1') + ' --req-id &lt;req_id&gt;</code></div>';
+  } else if (tab === 'db') {
+    const db = detailNode.dbEvt?.data?.db_snapshot || detailNode.ctxEvt?.data?.db_snapshot || {};
+    el.innerHTML = `<div class="json-view">DB Snapshot at this state:\n\n${JSON.stringify(db, null, 2)}</div>`;
+    if (!detailNode.dbEvt && !detailNode.ctxEvt?.data?.db_snapshot) el.innerHTML += '<div style="color:var(--text-dim);margin-top:8px">No DB snapshot available.</div>';
+  }
+}
+
+function escapeHtml(str) {
+  const d = document.createElement('div');
+  d.textContent = str;
+  return d.innerHTML;
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// SSE
+// ═══════════════════════════════════════════════════════════════════
+function startObserve(runId) {
+  currentRunId = runId;
+  timeline = [];
+  findings = [];
+  document.getElementById('findings-card').style.display = 'block';
+  document.getElementById('detail-card').style.display = 'none';
+  document.getElementById('flow-timer').textContent = '';
+  renderFlow();
+  renderFindings();
+
+  eventSource = new EventSource(`/api/tests/stream/${runId}`);
+
+  eventSource.addEventListener('checkpoint', e => {
+    const d = JSON.parse(e.data);
+    timeline.push({
+      event_type: d.event_type,
+      state: (d.state||'').toUpperCase(),
+      agent: d.agent || '',
+      timestamp: new Date().toISOString(),
+      data: d
+    });
+    renderFlow();
+  });
+
+  eventSource.addEventListener('finding', e => {
+    const d = JSON.parse(e.data);
+    findings.push(d);
+    renderFindings();
+  });
+
+  eventSource.addEventListener('state-change', e => {
+    const d = JSON.parse(e.data);
+    timeline.push({
+      event_type: 'state_transition',
+      state: (d.to||'').toUpperCase(),
+      data: {from: (d.from||'').toUpperCase()},
+      timestamp: new Date().toISOString()
+    });
+    document.getElementById('flow-timer').textContent = `State: ${(d.to||'').toUpperCase()}`;
+    renderFlow();
+  });
+
+  eventSource.addEventListener('gate-approved', e => {
+    const d = JSON.parse(e.data);
+    timeline.push({event_type: 'gate_approved', gate: d.gate, timestamp: new Date().toISOString()});
+    renderFlow();
+  });
+
+  eventSource.addEventListener('run-complete', e => {
+    const d = JSON.parse(e.data);
+    document.getElementById('flow-timer').textContent =
+      `${d.final_state||'?'} · ${(d.total_duration_s||0).toFixed(0)}s · ${d.findings_count||0} findings`;
+    eventSource.close();
+    resetButtons();
+    loadHistory();
+  });
+
+  eventSource.addEventListener('run-error', e => {
+    const d = JSON.parse(e.data);
+    alert('Run error: ' + (d.error||'unknown'));
+    eventSource.close();
+    resetButtons();
+  });
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Findings
+// ═══════════════════════════════════════════════════════════════════
+function renderFindings() {
+  const list = document.getElementById('findings-list');
+  const filtered = activeFilter === 'all' ? findings : findings.filter(f => f.severity === activeFilter);
+  document.getElementById('findings-count').textContent =
+    `${findings.length} total · ${findings.filter(f=>f.severity==='error').length} errors · ${findings.filter(f=>f.severity==='warning').length} warnings`;
+
+  if (filtered.length === 0) {
+    list.innerHTML = '<div style="color:var(--text-dim);padding:8px">No findings matching filter</div>';
+    return;
+  }
+
+  list.innerHTML = filtered.slice().reverse().map((f, i) => {
+    const detailId = `fd-${i}`;
+    return `<div class="finding ${f.severity}" onclick="document.getElementById('${detailId}').style.display=document.getElementById('${detailId}').style.display==='block'?'none':'block'">
+      <div class="rule">${f.rule||'?'}</div>
+      <div class="msg">${f.message||''}</div>
+      <div class="meta">${(f.severity||'?').toUpperCase()} · Agent ${f.agent||'?'} · State ${f.state||'?'}</div>
+      <div class="detail-panel" id="${detailId}">${JSON.stringify({suggestion: f.suggestion, context: f.context_snapshot, db: f.db_snapshot}, null, 2)}</div>
+    </div>`;
+  }).join('');
+}
+
+function filterFindings(filter) {
+  activeFilter = filter;
+  renderFindings();
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Buttons
+// ═══════════════════════════════════════════════════════════════════
+document.getElementById('btn-run').addEventListener('click', async () => {
+  const title = document.getElementById('inp-title').value.trim();
+  if (!title) return alert('Title required');
+  const desc = document.getElementById('inp-desc').value.trim();
+  const gate = document.querySelector('input[name="gate"]:checked').value;
+  const keep = document.getElementById('chk-keep').checked;
+
+  document.getElementById('btn-run').style.display = 'none';
+  document.getElementById('btn-stop').style.display = '';
+
+  const r = await fetch('/api/tests/run', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({title, description: desc, gate_strategy: gate, keep_data: keep}),
+  }).then(r => r.json());
+
+  if (!r.ok) { alert('Failed: ' + (r.error || r.preflight?.issues?.join(', ') || 'unknown')); resetButtons(); return; }
+
+  startObserve(r.run_id);
+});
+
+document.getElementById('btn-stop').addEventListener('click', () => {
+  if (eventSource) eventSource.close();
+  resetButtons();
+  loadStatus(); loadHistory();
+});
+
+function resetButtons() {
+  document.getElementById('btn-run').style.display = '';
+  document.getElementById('btn-stop').style.display = 'none';
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// History
+// ═══════════════════════════════════════════════════════════════════
+async function loadHistory() {
+  const r = await fetch('/api/tests/history').then(r => r.json()).catch(() => ({items:[]}));
+  const list = document.getElementById('history-list');
+  if (r.items.length === 0) { list.innerHTML = 'No runs yet'; return; }
+  list.innerHTML = r.items.map(h => {
+    const cls = h.final_state === 'done' ? 'hl-done' : 'hl-blocked';
+    return `<div class="history-row">
+      <span>${(h.started_at||'').slice(0,19)}</span>
+      <span style="flex:1">${h.title||''}</span>
+      <span class="${cls}">${h.final_state||'?'}</span>
+      <span>${Math.round(h.total_duration_s||0)}s</span>
+      <button class="small secondary" onclick="viewHistoryRun('${h.run_id}')">View</button>
+    </div>`;
+  }).join('');
+}
+
+async function viewHistoryRun(runId) {
+  const r = await fetch(`/api/tests/results/${runId}`).then(r => r.json());
+  timeline = r.timeline || [];
+  findings = r.findings || [];
+  currentRunId = runId;
+  document.getElementById('findings-card').style.display = 'block';
+  document.getElementById('flow-timer').textContent =
+    `${r.final_state||'?'} · ${Math.round(r.total_duration_s||0)}s`;
+  renderFlow();
+  renderFindings();
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Cleanup / Diagnose
+// ═══════════════════════════════════════════════════════════════════
+document.getElementById('btn-cleanup').addEventListener('click', async () => {
+  if (!confirm('Delete ALL test data?')) return;
+  const r = await fetch('/api/cleanup', {method:'POST'}).then(r => r.json());
+  alert(JSON.stringify(r, null, 2));
+});
+
+document.getElementById('btn-diagnose').addEventListener('click', async () => {
+  const reqId = document.getElementById('inp-diagnose').value.trim();
+  if (!reqId) return;
+  const r = await fetch(`/api/diagnose/${reqId}`).then(r => r.json());
+  alert(JSON.stringify(r, null, 2));
+});
+
+init();
+</script>
+</body>
+</html>

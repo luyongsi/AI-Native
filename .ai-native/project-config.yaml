@@ -1,0 +1,32 @@
+# .ai-native/project-config.yaml
+# Project environment configuration for Orchestrator context building.
+# This file is OPTIONAL — if missing, all values fall back to defaults.
+#
+# Environment variable: AI_NATIVE_CONFIG_DIR (default: .ai-native)
+
+project:
+  name: "AI-Native R&D Collaborative System"
+  repo_url: ""
+  branch: "main"
+  tech_stack:
+    - Python
+    - FastAPI
+    - React
+    - PostgreSQL
+    - NATS
+    - Temporal
+  coding_conventions: "PEP 8, type hints required, async/await preferred"
+  claude_md_path: "CLAUDE.md"
+
+deployment:
+  dev_url: "http://dev.example.com"
+  staging_url: "http://172.27.78.109:3000"
+  production_url: "https://prod.example.com"
+  db_connections:
+    dev: "postgresql://ai_native:ai_native_dev@localhost:5432/ai_native"
+    staging: "postgresql://ai_native:ai_native_dev@172.27.78.109:5432/ai_native"
+
+integration:
+  issue_tracker: ""
+  ci_cd: ""
+  monitoring: "grafana"

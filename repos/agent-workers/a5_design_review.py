@@ -117,19 +117,14 @@ class DesignReviewAgent(BaseAgentWorker):
 
         await self.report_status(req_id, "running", "Phase 1: LLM 设计评审")
 
-        # Run all three review dimensions via LLM
+        # Use compressed context instead of per-field brute truncation
+        context_text = await self.prepare_llm_context(context_package, state="reviewing")
+
         review_prompt = f"""你是一个资深技术评审专家。请对以下需求的设计规格进行三维度评审。
 
 需求标题: {title}
 
-## Spec 文档
-{section_text[:3000]}
-
-## API 规格 (OpenAPI)
-{openapi_text[:2000]}
-
-## 数据模型 (ERD)
-{erd_text[:1500]}
+{context_text}
 
 请输出严格 JSON（不要 markdown 包裹）：
 {{

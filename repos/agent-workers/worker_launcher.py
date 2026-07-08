@@ -43,7 +43,7 @@ from a5_design_review import DesignReviewAgent
 from a6_spec_decomposer import SpecDecomposerAgent
 from a7_test_case_generator import TestCaseGeneratorAgent
 from a8_architecture_expert import ArchitectureExpertAgent
-from a9_dev_agent_stub import DevAgent
+from a9.a9_dev_agent import A9DevAgent
 from ci_agent import CICDAgent
 from a11_test_agent_stub import A11TestAgentStub
 from a12_code_review import CodeReviewAgent
@@ -62,6 +62,10 @@ logger = logging.getLogger("worker_launcher")
 # Agent 注册表
 AGENT_REGISTRY: dict[BaseAgentWorker, str] = {}
 
+# A9 multi-instance config
+A9_WORKER_COUNT = int(os.environ.get("A9_WORKER_COUNT", "1"))
+A9_CONCURRENT_PER_INSTANCE = int(os.environ.get("A9_CONCURRENT", "3"))
+
 
 def register_agents():
     """注册所有 Agent Worker。"""
@@ -74,7 +78,11 @@ def register_agents():
         SpecDecomposerAgent(),
         TestCaseGeneratorAgent(),
         ArchitectureExpertAgent(),
-        DevAgent(),
+    ]
+    # Multiple A9 instances for horizontal scaling via NATS queue group
+    for i in range(A9_WORKER_COUNT):
+        agents.append(A9DevAgent(instance_id=i, max_concurrent=A9_CONCURRENT_PER_INSTANCE))
+    agents.extend([
         CICDAgent(),
         A11TestAgentStub(),
         CodeReviewAgent(),
@@ -82,7 +90,7 @@ def register_agents():
         KnowledgeKeeperAgent(),
         ChangePropagationAgent(),
         FastChannelClassifier(),
-    ]
+    ])
     for agent in agents:
         activity_name = f"{agent.agent_id}_{agent.agent_type}"
         AGENT_REGISTRY[agent] = activity_name

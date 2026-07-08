@@ -43,11 +43,28 @@ class A1RequirementIntake(BaseAgentWorker):
         super().__init__(self.agent_id, self.agent_type, nats_url)
 
     async def execute(self, req_id: str, context_package: dict) -> dict:
+        # A1 receives context_package from the NATS dispatch payload.
+        # Priority: message → title+description → requirement_draft field
         raw_message = context_package.get("message", "")
         if not raw_message:
             raw_message = context_package.get("msg_received", {}).get("text", "")
         if not raw_message:
-            raw_message = context_package.get("title", "")
+            title = context_package.get("title", "")
+            description = context_package.get("description", "")
+            if description:
+                raw_message = f"{title}: {description}" if title else description
+            else:
+                raw_message = title
+        if not raw_message:
+            # Last resort: requirement_draft from build_context passthrough
+            rd = context_package.get("requirement_draft", {})
+            if isinstance(rd, dict):
+                t = rd.get("title", "")
+                d = rd.get("description", rd.get("summary", ""))
+                if d:
+                    raw_message = f"{t}: {d}" if t else d
+                else:
+                    raw_message = t
 
         logger.info(f"[A1] Processing req={req_id}, message='{raw_message[:100]}...'")
 

@@ -3,7 +3,10 @@
 Module-level singleton (get_auditor) ensures all agents share one auditor
 with a single Lock for JSONL file writes, preventing interleaved lines.
 
-Outputs: file (JSONL) + stdout (one-line summary).
+Outputs: file (JSONL metadata) + file (full prompt/response per call) + stdout (one-line summary).
+
+Full prompt/response storage:
+  /opt/ai-native/logs/llm_calls/{req_id[:8]}/{call_id}.json
 """
 
 import json
@@ -37,10 +40,10 @@ class LLMAuditor:
 
     Usage (from adapter._chat_with_audit):
         auditor = get_auditor(outputs=["file", "stdout"])
-        call_id = auditor.record_start(agent_id="A1", req_id="xxx", ...)
+        call_id = auditor.record_start(agent_id="A1", req_id="xxx", prompt_text=...)
         try:
             response = adapter.chat(messages, ...)
-            auditor.record_end(call_id, response_chars=..., ...)
+            auditor.record_end(call_id, response_chars=..., response_text=...)
         except Exception as e:
             auditor.record_end(call_id, response_chars=0, ..., error=e)
     """
@@ -52,6 +55,9 @@ class LLMAuditor:
             "LLM_AUDIT_LOG", "/opt/ai-native/logs/llm_audit.jsonl"
         ))
         self._log_path.parent.mkdir(parents=True, exist_ok=True)
+        # Full prompt/response storage directory
+        self._calls_dir = self._log_path.parent / "llm_calls"
+        self._calls_dir.mkdir(parents=True, exist_ok=True)
         self._pending: dict[str, dict] = {}
 
     # ── public API ──────────────────────────────────────────────────
@@ -65,8 +71,12 @@ class LLMAuditor:
         provider: str = "",
         model: str = "",
         prompt_chars: int = 0,
+        prompt_text: str = "",
     ) -> str:
-        """Record the start of an LLM call. Returns a call_id for record_end."""
+        """Record the start of an LLM call. Returns a call_id for record_end.
+
+        prompt_text: the full prompt content (stored to a per-req file).
+        """
         call_id = str(uuid4())
         record = {
             "call_id": call_id,
@@ -77,6 +87,7 @@ class LLMAuditor:
             "provider": provider,
             "model": model,
             "prompt_chars": prompt_chars,
+            "prompt_text": prompt_text,
             "status": "started",
             "started_at": datetime.now(timezone.utc).isoformat(),
         }
@@ -96,12 +107,16 @@ class LLMAuditor:
         call_id: str,
         response_chars: int = 0,
         response_preview: str = "",
+        response_text: str = "",
         prompt_tokens: int = 0,
         completion_tokens: int = 0,
         duration_ms: int = 0,
         error: Exception | None = None,
     ):
-        """Record the completion of an LLM call."""
+        """Record the completion of an LLM call.
+
+        response_text: the full response content (stored to a per-req file).
+        """
         with self._lock:
             record = self._pending.pop(call_id, {})
         if not record:
@@ -117,15 +132,20 @@ class LLMAuditor:
             "total_tokens": prompt_tokens + completion_tokens,
             "response_chars": response_chars,
             "response_preview": (response_preview or "")[:500],
+            "response_text": response_text,
             "error_type": type(error).__name__ if error else None,
             "error_message": str(error)[:500] if error else None,
         })
         self._write(record)
+        self._write_full_call(record)
 
     # ── internal ────────────────────────────────────────────────────
 
     def _write(self, record: dict):
-        line = json.dumps(record, ensure_ascii=False)
+        """Write metadata line to JSONL (existing format, no prompt/response body)."""
+        slim = {k: v for k, v in record.items()
+                if k not in ("prompt_text", "response_text")}
+        line = json.dumps(slim, ensure_ascii=False)
         if "file" in self.outputs:
             with self._lock:
                 with open(self._log_path, "a", encoding="utf-8") as f:
@@ -142,3 +162,37 @@ class LLMAuditor:
                 f"{record.get('prompt_chars', 0)}->{record.get('response_chars', 0)} chars | "
                 f"{dur:.1f}s | tokens={tokens} | {status_icon}"
             )
+
+    def _write_full_call(self, record: dict):
+        """Write complete prompt+response to a per-req_id directory."""
+        prompt_text = record.get("prompt_text", "")
+        response_text = record.get("response_text", "")
+        if not prompt_text and not response_text:
+            return
+
+        req_id = (record.get("req_id", "") or "UNKNOWN")[:8]
+        req_dir = self._calls_dir / req_id
+        req_dir.mkdir(parents=True, exist_ok=True)
+
+        call_file = req_dir / f"{record['call_id']}.json"
+        try:
+            full = {
+                "call_id": record["call_id"],
+                "agent_id": record.get("agent_id", ""),
+                "task_type": record.get("task_type", ""),
+                "model": record.get("model", ""),
+                "status": record.get("status", ""),
+                "timestamp": record.get("started_at", ""),
+                "duration_ms": record.get("duration_ms", 0),
+                "tokens": {
+                    "prompt": record.get("prompt_tokens", 0),
+                    "completion": record.get("completion_tokens", 0),
+                    "total": record.get("total_tokens", 0),
+                },
+                "prompt": prompt_text,
+                "response": response_text,
+            }
+            with open(call_file, "w", encoding="utf-8") as f:
+                json.dump(full, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            logger.warning("Auditor: failed to write full call file %s: %s", call_file, e)

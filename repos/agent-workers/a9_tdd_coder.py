@@ -6,7 +6,7 @@ When test_assets are available in context (from A7), use TDD mode:
 2. Instruct Claude/LLM to write code that passes the tests
 3. Emit test.tdd_dev_complete event when code generation finishes
 
-Integrates with a9_claude_code_bridge.py execute_task() workflow.
+Integrates with A9CodingEngine + CoderModule code generation workflow.
 """
 from __future__ import annotations
 

@@ -103,6 +103,9 @@ class BaseAgentWorker:
     _shared_llm: object = None
     _shared_llm_lock = threading.Lock()
 
+    # ── Class-level shared context compressor ────────────────────────
+    _compressor: object | None = None
+
     def __init__(self, agent_id: str, agent_type: str, nats_url: str = "nats://localhost:4222"):
         self.agent_id = agent_id
         self.agent_type = agent_type
@@ -257,6 +260,22 @@ class BaseAgentWorker:
             logger.error("[%s] LLM call failed: %s", self.agent_id, e)
             return None
 
+    async def prepare_llm_context(self, context_package: dict, state: str) -> str:
+        """Unified LLM context preprocessing — compress + budget control.
+
+        Replaces per-agent brute-force truncation like context[:4000].
+        Lazily initializes the shared ContextCompressionService.
+        """
+        if BaseAgentWorker._compressor is None:
+            config = _load_context_budget_config()
+            BaseAgentWorker._compressor = ContextCompressionServiceClass(
+                config, llm_caller=self.call_llm,
+            )
+        budget = BaseAgentWorker._compressor.get_budget_for_state(state)
+        return await BaseAgentWorker._compressor.prepare_context(
+            context_package, budget, self.agent_id,
+        )
+
     async def execute(self, req_id: str, context_package: dict) -> dict:
         """子类重写此方法 — 执行 Agent 核心逻辑"""
         raise NotImplementedError
@@ -276,6 +295,11 @@ class BaseAgentWorker:
                 data = json.loads(msg.data.decode())
 
                 event_id = data.get("event_id", "")
+                # Extract req_id and context from the dispatch envelope
+                payload = data.get("payload", {})
+                req_id = data.get("req_id", "") or payload.get("req_id", "")
+                context = payload
+
                 # Dedup check with lock — prevents concurrent _handle() races
                 async with self._dedup_lock:
                     if event_id and any(eid == event_id for eid, _ in self._processed_ids):
@@ -481,3 +505,25 @@ def make_temporal_activity(agent: BaseAgentWorker, activity_name: str):
                 span.__exit__(None, None, None)
 
     return _activity
+
+
+# ── Context compression helper ──────────────────────────────────────────
+
+def _load_context_budget_config() -> dict:
+    """Load context-budget.yaml, return empty dict if unavailable."""
+    from pathlib import Path
+    _config_dir = Path(os.environ.get("AI_NATIVE_CONFIG_DIR", ".ai-native"))
+    path = _config_dir / "context-budget.yaml"
+    if not path.exists():
+        return {}
+    try:
+        import yaml
+        return yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except Exception:
+        return {}
+
+
+def ContextCompressionServiceClass(config, llm_caller=None):
+    """Lazy import wrapper for ContextCompressionService."""
+    from context_compression import ContextCompressionService
+    return ContextCompressionService(config, llm_caller=llm_caller)

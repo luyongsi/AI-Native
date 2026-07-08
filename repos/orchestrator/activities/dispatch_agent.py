@@ -15,6 +15,7 @@ from temporalio import activity
 logger = logging.getLogger(__name__)
 
 NATS_URL = os.environ.get("NATS_URL", "nats://localhost:4222")
+_CONTEXT_MAX_CHARS = int(os.environ.get("DISPATCH_CONTEXT_MAX_CHARS", "65536"))
 
 _nc: nats.NATS | None = None
 _connect_lock = asyncio.Lock()
@@ -43,6 +44,17 @@ async def _get_nats() -> nats.NATS:
     return _nc
 
 
+def _truncate_context(context: str, max_chars: int = 65536) -> str:
+    """Truncate context at max_chars, breaking at the nearest paragraph boundary."""
+    if len(context) <= max_chars:
+        return context
+    search_start = int(max_chars * 0.9)
+    break_pos = context.rfind("\n\n", search_start, max_chars)
+    if break_pos > search_start:
+        return context[:break_pos] + "\n\n[truncated — remaining items in _refs]"
+    return context[:max_chars] + "\n[truncated]"
+
+
 @activity.defn(name="dispatch_agent")
 async def dispatch_agent(
     req_id: str,
@@ -50,6 +62,8 @@ async def dispatch_agent(
     agent_id: str,
     workflow_id: str,
     context: str = "",
+    rework_context: dict | None = None,
+    ctx_meta: dict | None = None,
 ) -> dict:
     """Publish a dispatch message to NATS, targeting a specific agent.
 
@@ -59,10 +73,13 @@ async def dispatch_agent(
         agent_id: Target agent ID (e.g. "A1", "A3", "A4").
         workflow_id: Temporal workflow ID for Bridge routing.
         context: Serialized context string from build_context.
+        rework_context: Rework feedback dict (injected into payload for Agents).
+        ctx_meta: Context metadata from build_context (requirement_context, spec_sections, etc.).
 
     Returns:
         dict with ok, dispatched_at, agent_id, nats_subject.
     """
+    ctx_meta = ctx_meta or {}
     activity.logger.info(
         "dispatch_agent req=%s state=%s agent=%s wf=%s",
         req_id, state, agent_id, workflow_id,
@@ -98,6 +115,8 @@ async def dispatch_agent(
     agent_type = _AGENT_TYPE_MAP.get(agent_id, agent_id.lower())
     event_type = f"context.ready.{agent_type}"
 
+    # Extract requirement fields for Agent direct access
+    req_ctx = ctx_meta.get("requirement_context", {})
     envelope = {
         "event_id": f"dispatch-{req_id}-{state}-{agent_id}-{int(datetime.now(timezone.utc).timestamp() * 1000)}",
         "event_type": event_type,
@@ -106,8 +125,13 @@ async def dispatch_agent(
             "req_id": req_id,
             "state": state,
             "agent_id": agent_id,
-            "context": context[:5000],
+            "context": _truncate_context(context, _CONTEXT_MAX_CHARS),
             "workflow_id": workflow_id,
+            "rework_context": rework_context or {},
+            "requirement_draft": req_ctx,
+            "title": req_ctx.get("title", ""),
+            "description": req_ctx.get("description", ""),
+            "spec_sections": ctx_meta.get("spec_sections", []),
         },
         "req_id": req_id,
     }

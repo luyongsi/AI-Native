@@ -97,11 +97,13 @@ class LLMAdapter(ABC):
         workflow_id, task_type attributes).
         """
         from .audit import get_auditor
+        import json as _json_module
 
         auditor = get_auditor()
         ctx = ctx or _EMPTY_CTX
 
         prompt_chars = sum(len(str(m.get("content", ""))) for m in messages)
+        prompt_text = _json_module.dumps(messages, ensure_ascii=False)
 
         call_id = auditor.record_start(
             agent_id=getattr(ctx, "agent_id", ""),
@@ -111,6 +113,7 @@ class LLMAdapter(ABC):
             provider=self.provider_name,
             model=kwargs.get("model") or getattr(self, "default_model", ""),
             prompt_chars=prompt_chars,
+            prompt_text=prompt_text,
         )
 
         import time
@@ -119,10 +122,12 @@ class LLMAdapter(ABC):
             response = self.chat(messages=messages, **kwargs)
             elapsed_ms = int((time.monotonic() - started) * 1000)
             usage = response.usage if hasattr(response, "usage") else {}
+            response_content = response.content or ""
             auditor.record_end(
                 call_id,
-                response_chars=len(response.content or ""),
-                response_preview=(response.content or "")[:200],
+                response_chars=len(response_content),
+                response_preview=response_content[:500],
+                response_text=response_content,
                 prompt_tokens=usage.get("prompt_tokens", 0),
                 completion_tokens=usage.get("completion_tokens", 0),
                 duration_ms=elapsed_ms,

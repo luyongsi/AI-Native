@@ -1,0 +1,143 @@
+# testing-tool/truth-spec.yaml
+# 系统的"真相文件"——描述业务流程应该如何运行。
+# 业务架构变更时，先更新此文件，再改代码。
+
+meta:
+  version: "2.0"
+  description: "AI Native Pipeline 业务逻辑契约"
+
+# ═══ 状态机 ═══
+state_machine:
+  normal_flow:
+    DRAFT:          [ANALYZING, BLOCKED]
+    ANALYZING:      [DESIGNING, BLOCKED]
+    DESIGNING:      [REVIEWING, BLOCKED]
+    REVIEWING:      [DECOMPOSING, DESIGNING, BLOCKED]
+    DECOMPOSING:    [DEVELOPING, BLOCKED]
+    DEVELOPING:     [TESTING, BLOCKED]
+    TESTING:        [REVIEWING_CODE, DEVELOPING, BLOCKED]
+    REVIEWING_CODE: [RELEASING, BLOCKED]
+    RELEASING:      [DONE, BLOCKED]
+    DONE:           []
+    BLOCKED:        []
+
+  fast_flow:
+    DRAFT:      [FAST_PASS]
+    FAST_PASS:  [DEVELOPING, BLOCKED]
+    DEVELOPING: [TESTING, BLOCKED]
+    TESTING:    [RELEASING, BLOCKED]
+    RELEASING:  [DONE, BLOCKED]
+
+  rework:       { max_rounds: 2, trigger: "A5 返回 pass=false" }
+  inner_loop:   { max_rounds: 2, trigger: "A11 返回 pass=false" }
+
+# ═══ Agent 定义 ═══
+agents:
+  state_agent_map:
+    ANALYZING: A1
+    REVIEWING: A5
+    DECOMPOSING: A6
+    DEVELOPING: A9
+    TESTING: A11
+    REVIEWING_CODE: A12
+    RELEASING: A13
+
+  parallel_states:
+    DESIGNING:
+      agents: [A3, A4]
+      failure_policy:
+        A3: warn
+        A4: error
+
+  stubs: [A7, A10, A11]
+  self_persisting: [A4]
+
+# ═══ Gate 定义 ═══
+gates:
+  - { level: 0, runs_in_state: ANALYZING,      next_state: DESIGNING,      sla_hours: 1, grace_hours: null }
+  - { level: 1, runs_in_state: DESIGNING,      next_state: REVIEWING,      sla_hours: 4, grace_hours: 1    }
+  - { level: 2, runs_in_state: DECOMPOSING,    next_state: DEVELOPING,     sla_hours: 4, grace_hours: 1    }
+  - { level: 3, runs_in_state: REVIEWING_CODE, next_state: RELEASING,      sla_hours: 2, grace_hours: null }
+
+# ═══ 数据流 ═══
+data_flow:
+  upstream_artifacts:
+    designing:       [A1, A2]
+    reviewing:       [A1, A2, A3, A4]
+    decomposing:     [A1, A4, A5]
+    developing:      [A1, A4, A5, A6, A7]
+    testing:         [A4, A7, A9]
+    reviewing_code:  [A4, A9, A11]
+    releasing:       [A4, A9, A11, A12]
+
+  context_key_mapping:
+    A1:  [{ source: "spec.artifacts.A1",  context_path: "artifact_context.A1"  }]
+    A2:  [{ source: "spec.artifacts.A2",  context_path: "artifact_context.A2"  }]
+    A3:  [{ source: "spec.artifacts.A3",  context_path: "artifact_context.A3"  }]
+    A4:
+      - { source: "spec.openapi", context_path: "openapi_hint" }
+      - { source: "spec.erd",     context_path: "erd_hint"     }
+    A5:  [{ source: "spec.artifacts.A5",  context_path: "artifact_context.A5"  }]
+    A6:  [{ source: "spec.artifacts.A6",  context_path: "dag_hint"              }]
+    A7:  [{ source: "spec.artifacts.A7",  context_path: "artifact_context.A7"  }]
+    A9:  [{ source: "spec.artifacts.A9",  context_path: "artifact_context.A9"  }]
+    A11: [{ source: "spec.artifacts.A11", context_path: "artifact_context.A11" }]
+    A12: [{ source: "spec.artifacts.A12", context_path: "artifact_context.A12" }]
+
+  persistence_contracts:
+    A4:
+      - { target: "spec.openapi"  }
+      - { target: "api_schemas"   }
+      - { target: "spec.erd"      }
+      - { target: "erd_designs"   }
+    default:
+      - { target: "spec.artifacts.{agent_id}" }
+
+# ═══ 输出约束 ═══
+constraints:
+  hard:
+    a1_output_required_fields: [status, domain, requirement_draft]
+    a4_output_required_fields: [status, api_schema, erd, api_schema_valid, erd_tables]
+    a5_output_required_fields: [status, pass, scores, issues]
+    a6_dag_required_node_fields: [id, type, title, complexity, estimated_hours]
+    a9_required_fields: [status, files_changed, engine, iterations]
+    a12_required_fields: [verdict, score, issues, summary]
+
+  soft:
+    a4_min_erd_tables: 1
+    a6_min_dag_nodes: 5
+    a9_max_iterations: 3
+
+# ═══ 流程契约 ═══
+flow_contracts:
+  rework:
+    trigger: "A5 pass=false"
+    max_rounds: 2
+    expect_in_context: "[REWORK_FEEDBACK]"
+  inner_loop:
+    trigger: "A11 pass=false"
+    max_rounds: 2
+    expect_in_context: "[TEST_FAILURE_FEEDBACK]"
+
+# ═══ 超时预期 ═══
+timeout_expectations:
+  analyzing:       { max_seconds: 300,  warn_at_pct: 80 }
+  designing:       { max_seconds: 900,  warn_at_pct: 80 }
+  reviewing:       { max_seconds: 600,  warn_at_pct: 80 }
+  decomposing:     { max_seconds: 600,  warn_at_pct: 80 }
+  developing:      { max_seconds: 14400,warn_at_pct: 80 }
+  testing:         { max_seconds: 7200, warn_at_pct: 80 }
+  reviewing_code:  { max_seconds: 900,  warn_at_pct: 80 }
+  releasing:       { max_seconds: 1800, warn_at_pct: 80 }
+
+gate_sla:
+  gate_0: { sla_hours: 1, grace_hours: null }
+  gate_1: { sla_hours: 4, grace_hours: 1    }
+  gate_2: { sla_hours: 4, grace_hours: 1    }
+  gate_3: { sla_hours: 2, grace_hours: null }
+
+additional_checks:
+  worktree_path: "/tmp/a9-runtimes"
+  worktree_max_age_minutes: 120
+  llm_audit_completeness: true
+  duplicate_dispatch_window_seconds: 300

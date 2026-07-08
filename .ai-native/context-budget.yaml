@@ -1,0 +1,41 @@
+# .ai-native/context-budget.yaml
+# Token budget and compression configuration for Orchestrator + Agents.
+# This file is OPTIONAL — if missing, all values fall back to code defaults.
+#
+# Environment variable: AI_NATIVE_CONFIG_DIR (default: .ai-native)
+
+# Base model context window size. Change this to scale all budgets proportionally.
+# 200000 = DeepSeek v4, 1000000 = Gemini/Claude large context
+model_window: 200000
+
+# Per-state token budgets (percentage of model_window, capped at max)
+budgets:
+  analyzing:        { pct: 1.5, max: 3000 }
+  designing:        { pct: 3.0, max: 6000 }
+  reviewing:        { pct: 4.0, max: 8000 }
+  decomposing:      { pct: 3.0, max: 6000 }
+  developing:       { pct: 5.0, max: 10000 }
+  testing:          { pct: 3.0, max: 6000 }
+  reviewing_code:   { pct: 3.0, max: 6000 }
+  releasing:        { pct: 3.0, max: 6000 }
+  rework:           { pct: 6.0, max: 12000 }
+
+# Compression strategy toggles
+compression:
+  dedup_enabled: true
+  dedup_threshold: 0.85
+  llm_summarize_enabled: false         # Disabled by default — enables extra LLM call
+  llm_summarize_model: "deepseek"
+  structured_extract_enabled: true     # Pure Python processing, no LLM calls
+  lazy_load_enabled: false             # Requires Agent function calling (Phase 3+)
+
+# Static content summary cache (CLAUDE.md, coding conventions, etc.)
+summary_cache:
+  enabled: true
+  ttl_minutes: 120
+  cache_dir: ".ai-native/cache"
+
+# Transport layer configuration
+transport:
+  dispatch_agent_max_chars: 65536      # Up from 5000 (was ≈1250 tokens)
+  agent_side_auto_compress: true

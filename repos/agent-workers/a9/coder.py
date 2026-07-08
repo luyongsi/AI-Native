@@ -1,11 +1,11 @@
 """
 A9 Coder Module — Code Generation Brain
 
-Extends a9_claude_code_bridge.py with:
+Provides:
 - Worktree isolation (subprocess git worktree)
 - Context package input processing
 - Code diff generation + self-inspection report
-- Stateless LLM-based code generation
+- Stateless LLM-based code generation (via injected llm_caller)
 
 The Coder operates in isolation and produces:
   - code_diff: raw code changes
@@ -31,12 +31,15 @@ logger = logging.getLogger(__name__)
 class CoderModule:
     """Code generation brain — produces code diffs from task specs"""
 
-    def __init__(self, work_base: str = "/tmp/a9-worktrees", enable_llm: bool = True):
+    def __init__(self, llm_caller=None, work_base: str = "/tmp/a9-worktrees", enable_llm: bool = True):
         """
         Args:
+            llm_caller: Callable for LLM code generation (injected from A9DevAgent.call_llm).
+                        If None, falls back to mock code generation.
             work_base: Base directory for git worktrees
             enable_llm: Whether to use real LLM or mock mode
         """
+        self._llm_caller = llm_caller
         self.work_base = work_base
         self.enable_llm = enable_llm
         Path(work_base).mkdir(parents=True, exist_ok=True)
@@ -216,21 +219,75 @@ class CoderModule:
         return files_changed
 
     async def _call_llm_for_code_generation(self, task_spec: dict, worktree_path: str) -> Optional[list]:
-        """Call LLM (DeepSeek/Anthropic) for code generation"""
+        """Call LLM for code generation via injected llm_caller."""
+        if not self._llm_caller:
+            return None
+
         try:
-            # Import here to avoid hard dependency
-            from a9_claude_code_bridge import ClaudeCodeBridge
+            title = task_spec.get("title", "untitled")
+            task_type = task_spec.get("type", "backend")
+            plan = task_spec.get("plan", {})
+            files_needed = plan.get("files_to_create", plan.get("files_to_modify", ["src/main.py"]))
 
-            bridge = ClaudeCodeBridge()
-            result = await bridge.execute_task(task_spec, work_dir=worktree_path, req_id="")
+            prompt = f"""你是一个全栈开发工程师。需要为以下任务生成代码变更。
 
-            files_changed = result.get("files_changed", [])
-            logger.info(f"[Coder] LLM generated {len(files_changed)} files")
-            return files_changed
+任务: {title}
+类型: {task_type}
+需要创建/修改的文件: {', '.join(files_needed[:10])}
+工作目录: {worktree_path}
+
+输出严格 JSON 格式:
+{{
+  "files": [
+    {{
+      "path": "src/xxx.py",
+      "content": "完整的文件内容",
+      "language": "python"
+    }}
+  ],
+  "summary": "变更摘要（50字以内）",
+  "dependencies": ["包名1"]
+}}
+
+只输出 JSON。content 应该是完整的文件内容，包含必要的 import 和类型注解。"""
+
+            content = await self._llm_caller(
+                [{"role": "user", "content": prompt}],
+                task_type="code_generation",
+                temperature=0.3,
+                max_tokens=4000,
+            )
+
+            if content:
+                content = content.strip()
+                if content.startswith("```"): content = content.split("```")[1].split("```")[0].strip()
+                if content.startswith("json"): content = content[4:].strip()
+                result = json.loads(content)
+
+                files_changed = []
+                for f in result.get("files", []):
+                    full_path = os.path.join(worktree_path, f["path"])
+                    os.makedirs(os.path.dirname(full_path), exist_ok=True)
+                    with open(full_path, "w") as fh:
+                        fh.write(f["content"])
+
+                    content_lines = f["content"].split("\n")
+                    files_changed.append({
+                        "path": f["path"],
+                        "change_type": "created",
+                        "added": len(content_lines),
+                        "removed": 0,
+                        "diff": f"+{f['content'][:200]}...",
+                        "language": f.get("language", self._detect_language(f["path"])),
+                    })
+
+                logger.info(f"[Coder] LLM generated {len(files_changed)} files")
+                return files_changed
 
         except Exception as e:
             logger.warning(f"[Coder] LLM code generation failed: {e}")
-            return None
+
+        return None
 
     def _generate_mock_code(self, file_path: str, task_type: str, title: str) -> str:
         """Generate mock code content"""

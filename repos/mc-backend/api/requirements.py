@@ -279,3 +279,129 @@ async def get_requirement_detail(req_id: str):
         return req
     finally:
         await conn.close()
+
+
+# ── Status update model ─────────────────────────────────────────────────
+
+class StatusUpdate(BaseModel):
+    status: str
+    new_state: Optional[str] = None
+    old_state: Optional[str] = None
+    event: Optional[dict] = None
+    agent_id: Optional[str] = None
+
+
+@router.put("/{req_id}/status")
+async def update_requirement_status(req_id: str, body: StatusUpdate):
+    """Update requirement status from Orchestrator (best-effort from notify_mc).
+
+    - Updates requirements.status to match workflow state
+    - Advances spec.stages: sets matching stage to 'active', prior to 'done'
+    - Inserts agent_activities audit row
+    """
+    conn = await get_db()
+    try:
+        # Verify requirement exists
+        row = await conn.fetchrow(
+            "SELECT id, spec FROM requirements WHERE id = $1::uuid",
+            req_id,
+        )
+        if not row:
+            raise HTTPException(status_code=404, detail="Requirement not found")
+
+        spec = row.get("spec")
+        # asyncpg returns JSONB as a string; parse it first
+        if isinstance(spec, str):
+            try:
+                spec = json.loads(spec)
+            except (json.JSONDecodeError, TypeError):
+                spec = {}
+        if not isinstance(spec, dict):
+            spec = {}
+
+        # Advance stages: set matching new_state to 'active', previous active to 'done'
+        stages = spec.get("stages", [])
+        updated_stages = []
+        for s in stages:
+            key = s.get("key", "")
+            if key == body.new_state:
+                updated_stages.append({**s, "status": "active"})
+            elif s.get("status") == "active" and key != body.new_state:
+                updated_stages.append({**s, "status": "done"})
+            else:
+                updated_stages.append(s)
+        spec["stages"] = updated_stages
+
+        await conn.execute(
+            """UPDATE requirements
+               SET status = $1, spec = $2::jsonb, updated_at = NOW()
+               WHERE id = $3::uuid""",
+            body.status,
+            json.dumps(spec),
+            req_id,
+        )
+
+        # Insert audit record into agent_activities
+        if body.agent_id:
+            try:
+                await conn.execute(
+                    """INSERT INTO agent_activities (req_id, agent_id, agent_type,
+                       current_action, status, created_at)
+                       VALUES ($1::uuid, $2, $3, $4, $5, NOW())""",
+                    req_id,
+                    body.agent_id,
+                    "orchestrator",
+                    f"state: {body.old_state} -> {body.new_state}",
+                    body.status,
+                )
+            except Exception:
+                # agent_activities table might not exist or have different schema
+                pass
+
+        return {"ok": True, "req_id": req_id, "status": body.status}
+    finally:
+        await conn.close()
+
+
+class DecisionsUpdate(BaseModel):
+    decisions: dict = Field(..., description="{resolved: {decision_id: option}, source_gates: [1,2], approver: str}")
+
+
+@router.put("/{req_id}/decisions")
+async def update_requirement_decisions(req_id: str, body: DecisionsUpdate):
+    """Persist Gate approval decisions into spec.decisions JSONB.
+
+    Called by MC Backend when a human approves a gate with selected options.
+    The decisions are injected into the context for A9 (developing) and later agents.
+    """
+    conn = await get_db()
+    try:
+        row = await conn.fetchrow(
+            "SELECT id, spec FROM requirements WHERE id = $1::uuid",
+            req_id,
+        )
+        if not row:
+            raise HTTPException(status_code=404, detail="Requirement not found")
+
+        spec = row.get("spec")
+        if isinstance(spec, str):
+            try:
+                spec = json.loads(spec)
+            except (json.JSONDecodeError, TypeError):
+                spec = {}
+        if not isinstance(spec, dict):
+            spec = {}
+
+        decisions_data = body.decisions
+        decisions_data["approved_at"] = datetime.now(timezone.utc).isoformat()
+        spec["decisions"] = decisions_data
+
+        await conn.execute(
+            "UPDATE requirements SET spec = $1::jsonb, updated_at = NOW() WHERE id = $2::uuid",
+            json.dumps(spec),
+            req_id,
+        )
+
+        return {"ok": True, "req_id": req_id}
+    finally:
+        await conn.close()

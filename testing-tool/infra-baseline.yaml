@@ -1,0 +1,56 @@
+# testing-tool/infra-baseline.yaml
+# 基础设施连接配置和预期状态。
+# 与 truth-spec.yaml 分开: 此处随运维变更更新，不影响业务逻辑契约。
+# 工具首次部署时自动生成，后续可手动编辑。
+
+meta:
+  version: "1.0"
+  note: "运维变更时更新此文件。新增 NATS subject / DB 表 / LLM 模型时修改。"
+
+postgresql:
+  host: localhost
+  port: 5432
+  database: ai_native
+  expected_tables:
+    - requirements
+    - gate_approvals
+    - agent_activities
+    - api_schemas
+    - erd_designs
+    - test_executions
+    - knowledge_chunks
+
+nats:
+  url: nats://localhost:4222
+  expected_stream: AI_NATIVE_EVENTS
+  expected_subjects:
+    - context.ready.>
+    - agent.result.>
+    - agent.status.changed.>
+    - orchestrator.>
+
+temporal:
+  host: localhost:7233
+  namespace: ai-native
+  expected_workflows:
+    - RequirementWorkflow
+
+llm:
+  provider: deepseek
+  base_url: https://uniapi.ruijie.com.cn
+  expected_model: deepseek-v4-pro-202606
+
+mc_backend:
+  url: http://localhost:8000
+  expected_endpoints:
+    - GET /api/requirements
+    - GET /docs
+
+redis:
+  url: redis://localhost:6379
+
+systemd_services:
+  - ai-native-backend
+  - ai-native-frontend
+  - ai-native-agents
+  - ai-native-orchestrator

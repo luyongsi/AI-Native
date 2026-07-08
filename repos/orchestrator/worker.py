@@ -44,6 +44,7 @@ from activities.gate_await import create_gate_approval
 from activities.context_build import build_context
 from activities.notify_mc import notify_mc
 from activities.complexity_classifier import complexity_classifier
+from activities.store_agent_result import store_agent_result
 
 # ── Config ────────────────────────────────────────────────────────────
 TASK_QUEUE = os.environ.get("TEMPORAL_TASK_QUEUE", "orchestrator-task-queue")
@@ -86,6 +87,7 @@ async def main() -> None:
         build_context,
         notify_mc,
         complexity_classifier,
+        store_agent_result,
     ]
 
     worker = Worker(

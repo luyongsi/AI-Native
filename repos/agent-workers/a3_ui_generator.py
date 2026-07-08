@@ -31,20 +31,36 @@ class UIGeneratorAgent(BaseAgentWorker):
         self._original_specs: dict = {}  # Cache for original specs by req_id
 
     async def execute(self, req_id: str, context_package: dict) -> dict:
+        # Priority: context_package.title/description → requirement_draft → requirement
+        title = context_package.get("title", "")
+        description = context_package.get("description", "")
         requirement = context_package.get("requirement", context_package.get("requirement_draft", {}))
-        title = requirement.get("title", context_package.get("title", "未命名需求"))
-        description = requirement.get("description", requirement.get("summary", ""))
+        if not title and isinstance(requirement, dict):
+            title = requirement.get("title", "") or requirement.get("req_title", "")
+            description = requirement.get("description", requirement.get("summary", "")) or description
+        if not title:
+            title = "未命名需求"
 
         logger.info(f"[A3] Generating UI prototype for req={req_id}, title='{title}'")
 
         await self.report_status(req_id, "running", "Phase 1: 分析需求类型")
 
-        # Check for rework feedback from A5 review
-        rework_info = ""
-        context_str = context_package.get("context", "")
-        if "[REWORK_FEEDBACK]" in context_str:
-            rework_info = "\n\n【上一轮评审反馈 - 请重点修复以下问题】\n" + context_str.split("[REWORK_FEEDBACK]")[1][:2000]
-            logger.info(f"[A3] Detected rework feedback, will incorporate into prompt")
+        # Compressed context from the 5-layer model
+        context_str = await self.prepare_llm_context(context_package, state="designing")
+
+        # Extract rework feedback from rework_context (set by Workflow)
+        rework = context_package.get("rework_context") or {}
+        rework_issues = rework.get("issues", [])
+        if rework_issues:
+            lines = ["\n\n【上一轮评审反馈 — 请重点修复以下问题】"]
+            for issue in rework_issues[:10]:
+                severity = issue.get("severity", "?")
+                desc = issue.get("description", "")
+                suggestion = issue.get("suggestion", "")
+                lines.append(f"- [{severity}] {desc}")
+                if suggestion:
+                    lines.append(f"  修复建议: {suggestion}")
+            context_str += "\n".join(lines)
 
         # Try LLM generation
         html = None
@@ -60,7 +76,7 @@ class UIGeneratorAgent(BaseAgentWorker):
 需求标题: {title}
 需求描述: {description or title}
 业务领域: {requirement.get('domain', 'general')}
-{rework_info}
+{context_str}
 要求:
 1. 使用内联 CSS（无外部依赖），可直接在浏览器打开
 2. 包含搜索/筛选、数据表格、操作按钮等常见后台组件
@@ -109,8 +125,13 @@ class UIGeneratorAgent(BaseAgentWorker):
             "source": "llm" if llm_content else "fallback",
         })
 
-        return {"status": "completed", "prototype_size": len(html), "screens": len(screens),
-                "source": "llm" if llm_content else "fallback"}
+        return {
+            "status": "completed",
+            "prototype_size": len(html),
+            "screens": len(screens),
+            "source": "llm" if llm_content else "fallback",
+            "html_preview": html[:5000],
+        }
 
     async def _publish_prototype(self, req_id: str, html: str, screens: list):
         payload = {

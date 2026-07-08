@@ -29,6 +29,7 @@ with workflow.unsafe.imports_passed_through():
     from activities.context_build import build_context
     from activities.notify_mc import notify_mc
     from activities.gate_await import create_gate_approval
+    from activities.store_agent_result import store_agent_result
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +38,9 @@ _DEFAULT_RETRY = RetryPolicy(
     initial_interval=timedelta(seconds=2),
     maximum_interval=timedelta(seconds=30),
 )
+
+# Agents that persist their own results — skip store_agent_result
+_AGENTS_THAT_PERSIST = {"A4"}
 
 # Agent timeout per state
 _AGENT_TIMEOUTS: dict[RS, timedelta] = {
@@ -48,6 +52,24 @@ _AGENT_TIMEOUTS: dict[RS, timedelta] = {
     RS.TESTING: timedelta(hours=2),
     RS.REVIEWING_CODE: timedelta(minutes=15),
     RS.RELEASING: timedelta(minutes=30),
+}
+
+# Gate SLA — timeout triggers notification, NOT auto-approval
+_GATE_SLA: dict[int, timedelta] = {
+    0: timedelta(hours=1),
+    1: timedelta(hours=4),
+    2: timedelta(hours=4),
+    3: timedelta(hours=2),
+}
+
+# Gate grace period — extra wait window after SLA expiry before escalation
+# Gate 0/3: no grace period (notify then wait indefinitely)
+# Gate 1/2: 1-hour grace period
+_GATE_GRACE_PERIOD: dict[int, timedelta | None] = {
+    0: None,
+    1: timedelta(hours=1),
+    2: timedelta(hours=1),
+    3: None,
 }
 
 # States that require agent execution
@@ -82,12 +104,16 @@ class RequirementWorkflow:
         self._agent_id_expected: str = ""
         self._gate_approved: str | None = None
         self._agent_progress: dict[str, dict] = {}
-        self._escalate: bool = False
+        self._agent_failures: dict[str, int] = {}
 
         # A3/A4 parallel tracking
         self._agent_result_a3: dict | None = None
         self._agent_result_a4: dict | None = None
         self._last_a5_result: dict | None = None
+
+        # DEVELOPING ↔ TESTING inner loop (T8)
+        self._inner_loop_count: int = 0
+        self._last_test_result: dict | None = None
 
     @workflow.run
     async def run(self, req_id: str, initial_msg: str) -> str:
@@ -146,15 +172,32 @@ class RequirementWorkflow:
             # DESIGNING: dispatch A3 and A4 in parallel
             # If this is a rework, inject previous A5 review feedback
             review_feedback = self._last_a5_result if self._rework_count > 0 else None
-            await self._run_designing_parallel(req_id, wf_id, context_str, timeout, review_feedback)
+            await self._run_designing_parallel(req_id, wf_id, context_str, timeout, review_feedback, ctx)
+        elif state == RS.DEVELOPING and self._last_test_result:
+            # Inner loop: A11 test failed, inject failure feedback into A9 context
+            import json as _json
+            context_str = (
+                context_str
+                + "\n[TEST_FAILURE_FEEDBACK]\n"
+                + _json.dumps({
+                    "failed_tests": self._last_test_result.get("failed_tests", []),
+                    "failures_detail": self._last_test_result.get("failures_detail", []),
+                    "coverage_pct": self._last_test_result.get("coverage_pct", 0),
+                    "errors": (self._last_test_result.get("errors", []) or [])[:10],
+                }, ensure_ascii=False)
+            )
+            self._last_test_result = None
+            agent_id = self._agent_id_for_state(state)
+            await self._dispatch_and_wait(req_id, agent_id, wf_id, context_str, timeout, ctx_meta=ctx)
         else:
             # Single agent dispatch
             agent_id = self._agent_id_for_state(state)
-            await self._dispatch_and_wait(req_id, agent_id, wf_id, context_str, timeout)
+            await self._dispatch_and_wait(req_id, agent_id, wf_id, context_str, timeout, ctx_meta=ctx)
 
     async def _run_designing_parallel(
         self, req_id: str, wf_id: str, context_str: str, timeout: timedelta,
         review_feedback: dict | None = None,
+        ctx_meta: dict | None = None,
     ):
         """Dispatch A3 and A4 in parallel, wait for both.
 
@@ -165,28 +208,37 @@ class RequirementWorkflow:
         self._agent_result_a4 = None
         self._agent_id_expected = "A3"  # first dispatch
 
-        # Inject review feedback into context for rework iterations
+        # Inject review feedback as rework_context into the context string
+        # so Agent-side prepare_llm_context and rework_context parsing can pick it up
+        rework_block = {}
         if review_feedback:
             import json as _json
-            context_str = context_str + "\n[REWORK_FEEDBACK]\n" + _json.dumps(
-                review_feedback.get("scores", review_feedback),
-                ensure_ascii=False,
-            ) + "\n" + _json.dumps(
-                review_feedback.get("issues", []),
-                ensure_ascii=False,
+            scores = review_feedback.get("scores", {})
+            issues = review_feedback.get("issues", [])
+            rework_block = {
+                "round_number": self._rework_count,
+                "issues": issues,
+                "scores": scores,
+                "suggestion": "请重点修复 critical 和 major 级别的问题",
+                "previous_result": None,
+            }
+            context_str = (
+                context_str
+                + "\n[REWORK_FEEDBACK]\n"
+                + _json.dumps(rework_block, ensure_ascii=False)
             )
 
         # Dispatch A3
         await workflow.execute_activity(
             dispatch_agent,
-            args=[req_id, self._state.value, "A3", wf_id, context_str],
+            args=[req_id, self._state.value, "A3", wf_id, context_str, rework_block, ctx_meta],
             start_to_close_timeout=timedelta(seconds=30),
             retry_policy=_DEFAULT_RETRY,
         )
         # Dispatch A4
         await workflow.execute_activity(
             dispatch_agent,
-            args=[req_id, self._state.value, "A4", wf_id, context_str],
+            args=[req_id, self._state.value, "A4", wf_id, context_str, rework_block, ctx_meta],
             start_to_close_timeout=timedelta(seconds=30),
             retry_policy=_DEFAULT_RETRY,
         )
@@ -200,23 +252,65 @@ class RequirementWorkflow:
                          or workflow.now() >= deadline
             )
 
-        if self._agent_result_a3 is None:
-            workflow.logger.warning("A3 timeout — using fallback, non-fatal")
-        if self._agent_result_a4 is None:
-            workflow.logger.error("A4 timeout — escalating")
-            self._escalate = True
+        # Track A3/A4 failures independently
+        for agent, result in [("A3", self._agent_result_a3), ("A4", self._agent_result_a4)]:
+            if result is None:
+                self._agent_failures[agent] = self._agent_failures.get(agent, 0) + 1
+                failures = self._agent_failures[agent]
+                level = "warning" if agent == "A3" else "error"
+                if agent == "A3":
+                    workflow.logger.warning("A3 timeout — non-fatal (failure #%d)", failures)
+                else:
+                    workflow.logger.error("A4 timeout req=%s — escalating (failure #%d)", req_id, failures)
+                if failures >= 2:
+                    await workflow.execute_activity(
+                        notify_mc,
+                        args=[req_id, self._state.value, self._state.value,
+                              {"event": "agent_repeated_timeout", "agent_id": agent,
+                               "consecutive_failures": failures}],
+                        start_to_close_timeout=timedelta(seconds=30),
+                        retry_policy=_DEFAULT_RETRY,
+                    )
+            else:
+                self._agent_failures[agent] = 0
+
+                # T8: Check if agent requested BLOCKED before persisting
+                agent_status = result.get("status", "")
+                if agent_status in ("blocked", "escalated"):
+                    workflow.logger.warning(
+                        "Agent %s requested block: %s",
+                        agent, result.get("reason", "unknown"),
+                    )
+                    continue  # skip store_agent_result
+
+            # Persist A3/A4 results (A4 is in _AGENTS_THAT_PERSIST, so only A3 persists)
+            if result is not None and agent not in _AGENTS_THAT_PERSIST:
+                await workflow.execute_activity(
+                    store_agent_result,
+                    args=[req_id, agent, result],
+                    start_to_close_timeout=timedelta(seconds=30),
+                    retry_policy=_DEFAULT_RETRY,
+                )
 
     async def _dispatch_and_wait(
         self, req_id: str, agent_id: str, wf_id: str,
-        context_str: str, timeout: timedelta
+        context_str: str, timeout: timedelta,
+        ctx_meta: dict | None = None,
     ):
-        """Dispatch one agent and wait for completion via Signal."""
+        """Dispatch one agent and wait for completion via Signal.
+
+        Tracks consecutive timeout failures per agent_id.
+        Two consecutive timeouts trigger notify_mc escalation.
+        Successful completion resets the failure counter.
+        """
+        ctx_meta = ctx_meta or {}
         self._agent_result = None
         self._agent_id_expected = agent_id
 
         await workflow.execute_activity(
             dispatch_agent,
-            args=[req_id, self._state.value, agent_id, wf_id, context_str],
+            args=[req_id, self._state.value, agent_id, wf_id, context_str, {},
+                  ctx_meta],
             start_to_close_timeout=timedelta(seconds=30),
             retry_policy=_DEFAULT_RETRY,
         )
@@ -229,34 +323,139 @@ class RequirementWorkflow:
             )
 
         if self._agent_result is None:
-            workflow.logger.error(
-                "Agent %s timeout req=%s — escalating", agent_id, req_id
+            self._agent_failures[agent_id] = self._agent_failures.get(agent_id, 0) + 1
+            failures = self._agent_failures[agent_id]
+            workflow.logger.warning(
+                "Agent %s timeout #%d req=%s", agent_id, failures, req_id,
             )
-            self._escalate = True
+            if failures >= 2:
+                await workflow.execute_activity(
+                    notify_mc,
+                    args=[req_id, self._state.value, self._state.value,
+                          {"event": "agent_repeated_timeout", "agent_id": agent_id,
+                           "consecutive_failures": failures}],
+                    start_to_close_timeout=timedelta(seconds=30),
+                    retry_policy=_DEFAULT_RETRY,
+                )
+        else:
+            # Success resets the failure counter
+            self._agent_failures[agent_id] = 0
+
+            # T8: Check if agent requested BLOCKED before persisting
+            agent_status = self._agent_result.get("status", "")
+            if agent_status in ("blocked", "escalated"):
+                workflow.logger.warning(
+                    "Agent %s requested block: %s",
+                    agent_id, self._agent_result.get("reason", "unknown"),
+                )
+                return  # skip store_agent_result, _compute_next_state handles BLOCKED
+
+        # Persist agent result to DB (skip A4 — writes itself)
+        if self._agent_result is not None and agent_id not in _AGENTS_THAT_PERSIST:
+            await workflow.execute_activity(
+                store_agent_result,
+                args=[req_id, agent_id, self._agent_result],
+                start_to_close_timeout=timedelta(seconds=30),
+                retry_policy=_DEFAULT_RETRY,
+            )
 
     # ── Gate stage ───────────────────────────────────────────────────
 
     async def _run_gate_stage(self, req_id: str, gate_level: int):
-        """Create gate record, then wait for approve_gate Signal."""
+        """Create gate record, then wait for human approval.
+
+        Three phases:
+          1. Wait within SLA → if approved, return
+          2. SLA expired → notify (gate_timeout), enter grace period (Gate 1/2)
+          3. Grace expired → escalate, wait indefinitely for human approval
+        Gate is NEVER auto-approved — only approve_gate or gate_timeout Signal.
+        """
         self._gate_approved = None
+        sla = _GATE_SLA.get(gate_level, timedelta(hours=4))
+        sla_seconds = sla.total_seconds()
 
         await workflow.execute_activity(
             create_gate_approval,
-            args=[req_id, gate_level],
+            args=[req_id, gate_level, sla_seconds],
             start_to_close_timeout=timedelta(seconds=30),
             retry_policy=_DEFAULT_RETRY,
         )
 
         workflow.logger.info(
-            "Waiting for Gate %d approval req=%s", gate_level, req_id
+            "Waiting for Gate %d approval req=%s sla=%ds",
+            gate_level, req_id, sla_seconds,
         )
 
+        # Phase 1: Wait for approval within SLA
+        sla_deadline = workflow.now() + sla
         await workflow.wait_condition(
             lambda: self._gate_approved is not None
+                     or workflow.now() >= sla_deadline,
         )
 
+        if self._gate_approved is not None:
+            workflow.logger.info(
+                "Gate %d approved req=%s (within SLA)", gate_level, req_id,
+            )
+            return
+
+        # Phase 2: SLA expired — notify, check grace period
+        workflow.logger.warning(
+            "Gate %d SLA expired req=%s — notifying", gate_level, req_id,
+        )
+        await workflow.execute_activity(
+            notify_mc,
+            args=[req_id, self._state.value, self._state.value,
+                  {"event": "gate_timeout", "gate_level": gate_level,
+                   "sla_hours": sla_seconds / 3600}],
+            start_to_close_timeout=timedelta(seconds=30),
+            retry_policy=_DEFAULT_RETRY,
+        )
+
+        grace = _GATE_GRACE_PERIOD.get(gate_level)
+        if grace is not None:
+            # Gate 1/2: give extra wait window
+            grace_deadline = workflow.now() + grace
+            workflow.logger.info(
+                "Gate %d grace period %ds req=%s",
+                gate_level, grace.total_seconds(), req_id,
+            )
+            await workflow.wait_condition(
+                lambda: self._gate_approved is not None
+                         or workflow.now() >= grace_deadline,
+            )
+            if self._gate_approved is not None:
+                workflow.logger.info(
+                    "Gate %d approved req=%s (during grace)", gate_level, req_id,
+                )
+                return
+
+            # Grace period expired — escalate
+            workflow.logger.warning(
+                "Gate %d grace expired req=%s — escalating", gate_level, req_id,
+            )
+            await workflow.execute_activity(
+                notify_mc,
+                args=[req_id, self._state.value, self._state.value,
+                      {"event": "gate_grace_expired", "gate_level": gate_level}],
+                start_to_close_timeout=timedelta(seconds=30),
+                retry_policy=_DEFAULT_RETRY,
+            )
+
+        # Phase 3: Wait indefinitely for human approval (never auto-advance)
         workflow.logger.info(
-            "Gate %d approved req=%s", gate_level, req_id
+            "Gate %d waiting indefinitely for human approval req=%s",
+            gate_level, req_id,
+        )
+        await self._wait_for_gate()
+        workflow.logger.info(
+            "Gate %d approved req=%s", gate_level, req_id,
+        )
+
+    async def _wait_for_gate(self):
+        """Block indefinitely until gate approved or force-skipped by admin."""
+        await workflow.wait_condition(
+            lambda: self._gate_approved is not None,
         )
 
     # ── Temporal Signals ────────────────────────────────────────────
@@ -302,6 +501,19 @@ class RequirementWorkflow:
             "Signal reject_gate gate=%s reason=%s", gate_name, reason,
         )
         self._gate_approved = gate_name  # unblock, but result will show rejection
+
+    @workflow.signal
+    async def gate_timeout(self, gate_level: int, approver: str = ""):
+        """Signal: admin manually skip a gate.
+
+        Distinct from SLA timeout — this is a deliberate human action.
+        Records the approver so the audit trail distinguishes manual skip
+        from normal approval.
+        """
+        workflow.logger.warning(
+            "Gate %d force-skipped by admin: %s", gate_level, approver,
+        )
+        self._gate_approved = f"force-skip-gate-{gate_level}-by-{approver}"
 
     @workflow.signal
     async def pause(self):
@@ -379,7 +591,18 @@ class RequirementWorkflow:
         )
 
     def _compute_next_state(self, req_id: str, current: RS) -> RS:
-        """Linear state machine with rework loop."""
+        """State machine with rework loop, inner loop, and BLOCKED path."""
+
+        # T8: Agent may request BLOCKED — check before all other branches
+        if self._agent_result:
+            agent_status = self._agent_result.get("status", "")
+            if agent_status in ("blocked", "escalated"):
+                workflow.logger.warning(
+                    "Agent %s requested block: %s",
+                    self._agent_id_expected,
+                    self._agent_result.get("reason", "unknown"),
+                )
+                return RS.BLOCKED
 
         # REVIEWING -> check A5 result for rework
         if current == RS.REVIEWING:
@@ -397,6 +620,25 @@ class RequirementWorkflow:
             # Either passed or max rework reached
             return RS.DECOMPOSING
 
+        # T8: TESTING fail → back to DEVELOPING (inner loop, max 2)
+        if current == RS.TESTING:
+            a11_pass = False
+            if self._agent_result:
+                a11_pass = self._agent_result.get(
+                    "pass", self._agent_result.get("status") == "completed"
+                )
+            if not a11_pass and self._inner_loop_count < 2:
+                self._inner_loop_count += 1
+                workflow.logger.info(
+                    "Inner loop #%d: TESTING -> DEVELOPING (rework)",
+                    self._inner_loop_count,
+                )
+                self._last_test_result = self._agent_result
+                return RS.DEVELOPING
+            # Pass or exhausted → continue
+            self._inner_loop_count = 0
+            return RS.REVIEWING_CODE
+
         # DRAFT
         if current == RS.DRAFT:
             return RS.ANALYZING
@@ -412,7 +654,6 @@ class RequirementWorkflow:
             RS.DESIGNING: RS.REVIEWING,        # via Gate 1
             RS.REVIEWING_CODE: RS.RELEASING,   # via Gate 3
             RS.DEVELOPING: RS.TESTING,
-            RS.TESTING: RS.REVIEWING_CODE,
             RS.DECOMPOSING: RS.DEVELOPING,     # via Gate 2
             RS.RELEASING: RS.DONE,
         }

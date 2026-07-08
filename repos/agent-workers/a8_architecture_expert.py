@@ -114,10 +114,10 @@ class ArchitectureExpertAgent(BaseAgentWorker):
         return {"status": "completed", "review": summary}
 
     async def _llm_review(self, req_id: str, dag_text: str, context_package: dict) -> dict | None:
+        context_text = await self.prepare_llm_context(context_package, state="decomposing")
         prompt = f"""你是资深架构师。对以下 DAG 进行架构评审。
 
-## DAG 数据
-{dag_text[:3000]}
+{context_text}
 
 输出 JSON:
 {{

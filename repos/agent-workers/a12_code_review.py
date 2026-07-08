@@ -68,7 +68,8 @@ class CodeReviewAgent(BaseAgentWorker):
 
         await self.report_status(req_id, "running", "Phase 1: LLM 代码审查")
 
-        review_text = json.dumps(context_package, ensure_ascii=False)[:4000]
+        # Context compression replaces brute [:4000] truncation
+        review_text = await self.prepare_llm_context(context_package, state="reviewing_code")
         prompt = f"""你是资深代码审查员。审查以下代码变更。
 
 代码变更上下文:

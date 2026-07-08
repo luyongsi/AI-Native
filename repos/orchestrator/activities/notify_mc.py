@@ -1,4 +1,4 @@
-"""notify_mc Activity — publish state change to NATS Event Bus."""
+"""notify_mc Activity — publish state change to NATS + sync to MC Backend."""
 
 import json
 import logging
@@ -11,6 +11,7 @@ from temporalio import activity
 logger = logging.getLogger(__name__)
 
 NATS_URL = os.environ.get("NATS_URL", "nats://localhost:4222")
+MC_BACKEND_URL = os.environ.get("MC_BACKEND_URL", "http://localhost:8000")
 
 _nc: nats.NATS | None = None
 
@@ -23,6 +24,28 @@ async def _get_nats() -> nats.NATS:
     return _nc
 
 
+async def _sync_to_mc_backend(req_id: str, new_state: str, old_state: str, extra: dict) -> bool:
+    """Best-effort HTTP PUT to MC Backend. Returns True if synced, False on failure."""
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.put(
+                f"{MC_BACKEND_URL}/api/requirements/{req_id}/status",
+                json={
+                    "status": new_state,
+                    "old_state": old_state,
+                    "new_state": new_state,
+                    "event": extra,
+                    "agent_id": "orchestrator",
+                },
+            )
+            resp.raise_for_status()
+            return True
+    except Exception:
+        logger.warning("notify_mc: MC Backend sync failed for req=%s (non-fatal)", req_id)
+        return False
+
+
 @activity.defn(name="notify_mc")
 async def notify_mc(
     req_id: str,
@@ -30,10 +53,11 @@ async def notify_mc(
     new_state: str,
     extra: dict | None = None,
 ) -> dict:
-    """Publish a state-change notification to NATS.
+    """Publish a state-change notification to NATS and sync to MC Backend.
 
     Subject: `orchestrator.state.<req_id>`
     Also publishes to `agent.status.changed` for MC live view.
+    HTTP PUT to MC Backend is best-effort — failure does not block.
     """
     extra = extra or {}
     now = datetime.now(timezone.utc)
@@ -58,6 +82,7 @@ async def notify_mc(
         "old_state": old_state,
         "new_state": new_state,
         "published_at": now_ts,
+        "mc_synced": False,
         "note": "",
     }
 
@@ -80,5 +105,8 @@ async def notify_mc(
         result["ok"] = False
         result["note"] = f"NATS publish failed: {e}"
         activity.logger.error("notify_mc: NATS publish failed: %s", e)
+
+    # Best-effort sync to MC Backend
+    result["mc_synced"] = await _sync_to_mc_backend(req_id, new_state, old_state, extra)
 
     return result

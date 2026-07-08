@@ -69,11 +69,11 @@ class SpecDecomposerAgent(BaseAgentWorker):
 
     async def _llm_decompose(self, title: str, spec: dict, draft: dict, req_id: str, context_package: dict) -> dict | None:
         """Use LLM to decompose spec into task DAG"""
+        context_text = await self.prepare_llm_context(context_package, state="decomposing")
         prompt = f"""你是一个技术项目经理。将以下需求拆解为开发任务 DAG。
 
 需求标题: {title}
-API 规格: {json.dumps(spec.get('openapi', {}), ensure_ascii=False, indent=2)[:2000]}
-ERD: {json.dumps(spec.get('erd', {}), ensure_ascii=False, indent=2)[:1000]}
+{context_text}
 
 输出严格 JSON：
 {{

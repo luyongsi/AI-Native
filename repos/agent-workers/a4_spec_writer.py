@@ -186,12 +186,20 @@ class A4SpecWriter(BaseAgentWorker):
 
         requirement_text = draft.get("summary", draft.get("title", ""))
 
-        # Check for rework feedback from A5 review
+        # Check for rework feedback from A5 review — use rework_context from
+        # the 5-layer context package (set by Workflow), not text parsing.
         rework_info = ""
-        context_str = context_package.get("context", "")
-        if "[REWORK_FEEDBACK]" in context_str:
-            rework_info = context_str.split("[REWORK_FEEDBACK]")[1][:2000]
-            logger.info(f"[A4] Detected rework feedback, will pass to sub-modules")
+        rework = context_package.get("rework_context") or {}
+        rework_issues = rework.get("issues", [])
+        if rework_issues:
+            lines = []
+            for issue in rework_issues[:10]:
+                severity = issue.get("severity", "?")
+                desc = issue.get("description", "")
+                suggestion = issue.get("suggestion", "")
+                lines.append(f"[{severity}] {desc}" + (f" → {suggestion}" if suggestion else ""))
+            rework_info = "\n".join(lines)
+            logger.info(f"[A4] Detected rework feedback ({len(rework_issues)} issues), will pass to sub-modules")
 
         # Detect existing tables for incremental schema
         existing_tables = await self._detect_existing_tables(self._db_pool)

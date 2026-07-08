@@ -23,7 +23,7 @@ def _gate_level(gate_name: str | int) -> int:
 
 
 @activity.defn(name="create_gate_approval")
-async def create_gate_approval(req_id: str, gate_level: str | int) -> dict:
+async def create_gate_approval(req_id: str, gate_level: str | int, sla_seconds: float = 14400.0) -> dict:
     """Create a gate_approvals record and return immediately.
 
     The Workflow then waits for approve_gate Signal instead of polling.
@@ -31,14 +31,16 @@ async def create_gate_approval(req_id: str, gate_level: str | int) -> dict:
     Args:
         req_id: Requirement UUID.
         gate_level: Gate level number (0-3) or name string.
+        sla_seconds: SLA timeout in seconds (informational, Workflow handles enforcement).
 
     Returns:
         dict with gate_id, created, gate_level.
     """
     gate_num = _gate_level(gate_level)
+    sla_hours = sla_seconds / 3600.0
 
     activity.logger.info(
-        "create_gate_approval req=%s gate=%d", req_id, gate_num,
+        "create_gate_approval req=%s gate=%d sla=%.1fh", req_id, gate_num, sla_hours,
     )
 
     try:
@@ -48,11 +50,11 @@ async def create_gate_approval(req_id: str, gate_level: str | int) -> dict:
         await gsm.connect()
 
         try:
-            # 4h SLA — informational only, Workflow handles the real wait
+            # SLA is informational only — Workflow handles the real wait
             gate_record = await gsm.create_gate(
                 req_id=req_id,
                 gate_level=gate_num,
-                sla_hours=4.0,
+                sla_hours=sla_hours,
             )
             activity.logger.info(
                 "Gate created: %s req=%s level=%d",
