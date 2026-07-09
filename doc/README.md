@@ -2,16 +2,20 @@
 
 ## 📂 目录结构
 
-### 📘 系统架构（有效文档）
-- `AI-Native研发协同系统-04-Agent协作与触发机制详规.md` - Agent 协作与触发机制（v3.0，当前最新）
-- `Agent数据流架构.md` - Agent 数据流与编排架构
-- `Orchestrator完整规格.md` - Orchestrator 状态机与调度逻辑
-- `Orchestrator重构规格.md` - Orchestrator 重构规格
-- `LLM-Provider审计规格.md` - LLM Provider 审计与修复
+### 📘 系统架构（当前有效）
+- `系统状态机与信息流设计.md` — **权威基线 v2.4**，全流程 Mermaid 图、Agent/Gate 节点定义、33 事件协议
+- `系统架构/AI-Native研发协同系统-04-Agent协作与触发机制详规.md` — Agent 协作与触发机制
+- `系统架构/Agent数据流架构.md` — Agent 数据流与编排架构
+- `系统架构/Orchestrator完整规格.md` — Orchestrator 状态机、五层上下文、分层压缩
+- `系统架构/Orchestrator重构规格.md` — Orchestrator 重构规格
+- `系统架构/LLM-Provider审计规格.md` — LLM Provider 审计与修复
 
-### 🤖 Agent规格（各Agent详细规格）
-- `A1-需求分析Agent规格.md` - A1 需求分析 Agent
-- *(待补充其他 Agent 规格)*
+### 🤖 Agent规格
+- `Agent规格/A1-需求分析Agent完整设计.md` — A1 需求分析（多轮对话、验收标准、线框图）
+- `Agent规格/A2-知识分析Agent规格.md` — A2 知识分析（知识库检索、可行性评估）
+- `Agent规格/A9-开发Agent实现说明.md` — A9 代码开发（Claude Code SDK、双脑架构）
+- `Agent规格/A10-CI-CD-Agent改造规格.md` — A10 CI/CD部署（NATS+MCP双模式）
+- `Agent规格/README.md` — 全部 Agent 状态清单与编写优先级
 
 ### 📦 部署文档
 - `DEPLOY.md` - 部署指南
@@ -66,6 +70,12 @@
 
 ## 🔄 最近更新
 
+### 2026-07-09
+- ✅ 新增《系统状态机与信息流设计》v2.4 — 完整系统基线
+- ✅ 重新整理 A1 需求分析 Agent 设计（四份旧文档合并为完整设计文档）
+- ✅ 新增 A9 开发 Agent 实现说明文档
+- ✅ 更新项目根 README 反映最新设计基线
+
 ### 2026-07-08
 - ✅ 创建 Agent规格 目录，补充 A1 规格
 - ✅ 整理 doc 目录结构，归档废弃文档
@@ -73,6 +83,6 @@
 - ✅ 将 bugs/、specs/、plan/ 按类型归档
 
 ### 待办
-- [ ] 补充 A3、A4、A5、A6、A9、A11、A12 规格
-- [ ] 更新 Orchestrator 工作模式文档（已生成，待整合）
-- [ ] 标记 A2、A7、A8 为"未调度"状态
+- [ ] 补充 A3、A4、A5、A6、A7、A11、A12 规格文档
+- [ ] Orchestrator 规格与《系统状态机》基线对齐更新
+- [ ] A2、A7 调度接入 Orchestrator 主状态机

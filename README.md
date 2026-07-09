@@ -14,15 +14,27 @@
 | [01-调研与立项报告](doc/AI-Native研发协同系统-01-调研与立项报告.md) | 行业调研、竞品分析、立项依据 | 20 min |
 | [02-多Agent编排架构与设计规格](doc/AI-Native研发协同系统-02-多Agent编排架构与设计规格.md) | Agent 职责定义、状态机、协作拓扑 | 30 min |
 | [03-人机协同与指挥舱产品总览](doc/AI-Native研发协同系统-03-人机协同与指挥舱产品总览.md) | Mission Control 前端、Gate 审批流程 | 20 min |
-| [04-Agent协作与触发机制详规](doc/AI-Native研发协同系统-04-Agent协作与触发机制详规.md) | 事件协议、触发条件、NATS 主题规范 | 40 min |
+| [04-Agent协作与触发机制详规](doc/系统架构/AI-Native研发协同系统-04-Agent协作与触发机制详规.md) | 事件协议、触发条件、NATS 主题规范 | 40 min |
 | [05-技术栈与工程落地详规](doc/AI-Native研发协同系统-05-技术栈与工程落地详规.md) | 基础设施、部署架构、技术选型 | 40 min |
+| [系统状态机与信息流设计](doc/系统状态机与信息流设计.md) | **权威基线 v2.4** — 全流程 Mermaid 图、Agent/Gate 节点定义、事件协议 | 30 min |
 
 ### 实施 Spec（当前迭代的工作规格）
 
 | 文档 | 状态 | 说明 |
 |------|------|------|
-| [orchestrator-refactor-spec.md](doc/orchestrator-refactor-spec.md) | ✅ 已实施 | 调度收归 — Signal+wait_condition 替代 Activity 阻塞 |
-| [llm-provider-audit-spec.md](doc/llm-provider-audit-spec.md) | ✅ 已实施 | LLM 调用统一 — llm-provider 加审计层 + Agent 迁移 |
+| [系统状态机与信息流设计](doc/系统状态机与信息流设计.md) | ✅ v2.4 | **权威基线** — 完整流程、17节点定义、33事件协议、循环计数器规则 |
+| [Orchestrator完整规格](doc/系统架构/Orchestrator完整规格.md) | ✅ v1.1 | 五层上下文、分层压缩、8个Task的实施规格 |
+| [llm-provider-audit-spec.md](doc/系统架构/LLM-Provider审计规格.md) | ✅ 已实施 | LLM 调用统一 — llm-provider 加审计层 + Agent 迁移 |
+
+### Agent 规格
+
+| 文档 | 状态 | 说明 |
+|------|------|------|
+| [A1-需求分析Agent完整设计](doc/Agent规格/A1-需求分析Agent完整设计.md) | ✅ | 多轮对话、需求草案、验收标准、线框图 |
+| [A2-知识分析Agent规格](doc/Agent规格/A2-知识分析Agent规格.md) | ✅ | 知识库检索、可行性评估、冲突识别 |
+| [A9-开发Agent实现说明](doc/Agent规格/A9-开发Agent实现说明.md) | ✅ | Claude Code SDK、双脑架构 |
+| [A10-CI-CD-Agent改造规格](doc/Agent规格/A10-CI-CD-Agent改造规格.md) | ✅ | Sandbox部署、NATS+MCP双模式 |
+| [Agent规格目录](doc/Agent规格/README.md) | 📋 | 全部Agent状态清单与编写优先级 |
 
 ### Bug 追踪
 
@@ -84,21 +96,24 @@ cd /opt/ai-native/repos/orchestrator && nohup python3 worker.py > /var/log/orche
 ## 核心流程图
 
 ```
-用户创建需求 → POST /api/requirements/{id}/trigger
+用户创建需求 → A1 多轮对话(HTTP+SSE)
   │
-  ├─ MC Backend 启动 Temporal Workflow
-  │   └─ RequirementWorkflow (DRAFT → ANALYZING → DESIGNING → ... → DONE)
+  ├─ 阶段一：需求分析
+  │   A1 产出需求草案+验收标准 → A2 知识分析+可行性评估 → Gate0 产品审批
+  │   Gate0 reject → 回到 A1 修订
   │
-  ├─ Workflow 调用 dispatch_agent Activity
-  │   └─ 发布 NATS: context.ready.{agent_type}
-  │       └─ Agent Worker 收到消息 → execute() → 发布 agent.result.{agent_id}
-  │           └─ NATS-Temporal Bridge 转发 Signal → Workflow 继续
+  ├─ 阶段二：设计
+  │   A3 高保真原型 → A4 Spec+OpenAPI+ERD+DDL → A5 自动设计检查 → Gate1 产品审批
+  │   Gate1 reject → 回到 A4 修订（A3不自动返工）
   │
-  ├─ Gate 阶段: Workflow 等待 approve_gate Signal
-  │   └─ 用户在 MC 审批 → POST /api/approvals/{id}/approve
-  │       └─ approvals.py 调用 handle.signal("approve_gate")
+  ├─ 阶段三：技术准备
+  │   A6+DAG架构设计 ∥ A7 测试用例生成 → Gate2 架构师审批
+  │   Gate2 reject → 回到 A6+A7 修订
   │
-  └─ Rework: A5 fail → REVIEWING 回到 DESIGNING (max 2次)
+  └─ 阶段四：开发→测试→审查 循环
+      A9 代码开发 → A10 Sandbox部署 → A11 自动化测试 → A12 Code Review → ✅ 完成
+      A11 失败 ≤5轮 → 自动回 A9   |  >5轮 → Gate3 人工判断
+      A12 不通过 ≤3轮 → 自动回 A9  |  >3轮 → Gate4 人工判断
 ```
 
 ---
@@ -107,10 +122,12 @@ cd /opt/ai-native/repos/orchestrator && nohup python3 worker.py > /var/log/orche
 
 | 模块 | 状态 | 备注 |
 |------|------|------|
+| 系统设计基线 | ✅ v2.4 | 《系统状态机与信息流设计》— 17节点、33事件、4阶段完整流程 |
 | Orchestrator 状态机 | ✅ 已完成 | 完整流程走通 DRAFT→DONE |
-| Gate 0-3 审批 | ✅ 已完成 | Signal+wait_condition 模式 |
+| Gate 0-4 审批 | ✅ 已设计 | Gate0-2 已实现，Gate3-4 待实施 |
 | LLM 统一审计 | ✅ 已完成 | llm-provider 集成 + JSONL 审计日志 |
 | Agent 迁移 | ✅ 已完成 | 13 个 Agent 全部用 self.call_llm() |
-| Rework 闭环 | 🔴 | BUG-13: 评审反馈未传递给 A3/A4 |
-| Spec 数据 Schema | 🔴 | BUG-14: A4 产出结构不与 A5 输入匹配 |
+| A2 调度接入 | 🔴 | 当前不在主状态机链路中，待接入 |
+| A7 调度接入 | 🔴 | 已实现但未调度，待接入 PARALLEL_A6_A7 阶段 |
 | notify_mc 同步 | 🟡 | Stub 实现，需求 status 未同步到 MC |
+| A10 CI/CD部署 | 🟡 | 待从TDD Coder改造为CI/CD部署Agent |
