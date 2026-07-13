@@ -164,7 +164,10 @@ async def _check_mc_backend(baseline: dict) -> dict:
     cfg = baseline["mc_backend"]
     try:
         async with httpx.AsyncClient(timeout=10) as http:
-            resp = await http.get(f"{cfg['url']}/api/requirements?limit=1")
+            resp = await http.get(
+                f"{cfg['url']}/api/requirements?limit=1",
+                headers={"Authorization": "Bearer dev-internal-key"},
+            )
         return {
             "passed": resp.status_code < 500,
             "status_code": resp.status_code,

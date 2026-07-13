@@ -1,18 +1,23 @@
 """Temporal Workflow: RequirementWorkflow.
 
-Implements the full state machine per design doc.
+Implements the full state machine per design docs v3.5.
 
-State progression:
-    DRAFT -> ANALYZING -> Gate 0 -> DESIGNING -> Gate 1 -> REVIEWING ->
-    DECOMPOSING -> Gate 2 -> DEVELOPING -> TESTING ->
-    REVIEWING_CODE -> Gate 3 -> RELEASING -> DONE
+State progression (Phase 1):
+    DRAFT -> ANALYZING (A1 via HTTP+SSE, waits for Signal)
+    -> KNOWLEDGE_ANALYSIS (A2 via NATS dispatch)
+    -> Gate 0 -> DESIGNING (A3+A4) -> Gate 1 -> REVIEWING (A5) ->
+    DECOMPOSING (A6) -> Gate 2 -> DEVELOPING (A9) -> TESTING (A11) ->
+    REVIEWING_CODE (A12) -> Gate 3 -> RELEASING (A13) -> DONE
+
+Gate0 reject -> back to ANALYZING (A1 revision, cycle++), then re-run A2->Gate0.
 
 Rework:
     REVIEWING fail -> back to DESIGNING (max 2 rounds), then escalate Gate.
 
-All agent dispatch goes through NATS (via dispatch_agent Activity).
-Agent completion comes back via Bridge -> agent_completed Signal.
-Gate approval via approve_gate Signal from MC Backend.
+A1 (ANALYZING): runs via HTTP+SSE, workflow waits for agent_completed Signal
+    from NATS-Temporal Bridge (triggered by agent.result.A1).
+A2-A13: dispatched via NATS (dispatch_agent Activity).
+Gate approval via approve_gate/reject_gate Signal from MC Backend.
 """
 from __future__ import annotations
 
@@ -44,7 +49,8 @@ _AGENTS_THAT_PERSIST = {"A4"}
 
 # Agent timeout per state
 _AGENT_TIMEOUTS: dict[RS, timedelta] = {
-    RS.ANALYZING: timedelta(minutes=5),
+    RS.ANALYZING: timedelta(minutes=30),           # A1 via HTTP+SSE — humans are slow
+    RS.KNOWLEDGE_ANALYSIS: timedelta(minutes=10),  # A2 knowledge analysis
     RS.DESIGNING: timedelta(minutes=15),
     RS.REVIEWING: timedelta(minutes=10),
     RS.DECOMPOSING: timedelta(minutes=10),
@@ -72,15 +78,17 @@ _GATE_GRACE_PERIOD: dict[int, timedelta | None] = {
     3: None,
 }
 
-# States that require agent execution
+# States that require agent execution (ANALYZING=A1 is special — HTTP+SSE, not NATS dispatch)
+# ANALYZING is NOT in _AGENT_STATES — workflow waits for agent_completed Signal instead
 _AGENT_STATES: set[RS] = {
-    RS.ANALYZING, RS.DESIGNING, RS.REVIEWING, RS.DECOMPOSING,
+    RS.KNOWLEDGE_ANALYSIS,  # A2 — NATS dispatch
+    RS.DESIGNING, RS.REVIEWING, RS.DECOMPOSING,
     RS.DEVELOPING, RS.TESTING, RS.REVIEWING_CODE, RS.RELEASING,
 }
 
 # States that require gate approval
 _GATED_STATES: dict[RS, int] = {
-    RS.ANALYZING: 0,
+    RS.KNOWLEDGE_ANALYSIS: 0,  # Gate 0 after A2
     RS.DESIGNING: 1,
     RS.DECOMPOSING: 2,
     RS.REVIEWING_CODE: 3,
@@ -159,7 +167,30 @@ class RequirementWorkflow:
         wf_id = workflow.info().workflow_id
         timeout = _AGENT_TIMEOUTS.get(state, timedelta(minutes=10))
 
-        # Build context
+        # A1 (ANALYZING): runs via HTTP+SSE, workflow waits for agent_completed Signal
+        if state == RS.ANALYZING:
+            workflow.logger.info(
+                "Waiting for A1 (HTTP/SSE) to complete req=%s", req_id,
+            )
+            deadline = workflow.now() + timeout
+            await workflow.wait_condition(
+                lambda: self._agent_result is not None or workflow.now() >= deadline,
+            )
+            if self._agent_result is None:
+                workflow.logger.error("A1 timeout req=%s — blocking for human intervention", req_id)
+                await self._transition(req_id, RS.BLOCKED, {"reason": "A1_timeout"})
+            else:
+                # A1 result: persist it
+                agent_id = "A1"
+                await workflow.execute_activity(
+                    store_agent_result,
+                    args=[req_id, agent_id, self._agent_result],
+                    start_to_close_timeout=timedelta(seconds=30),
+                    retry_policy=_DEFAULT_RETRY,
+                )
+            return
+
+        # Build context for NATS-dispatched agents
         ctx = await workflow.execute_activity(
             build_context,
             args=[req_id, state.value],
@@ -495,12 +526,19 @@ class RequirementWorkflow:
         self._gate_approved = gate_name
 
     @workflow.signal
-    async def reject_gate(self, gate_name: str, reason: str = ""):
+    async def reject_gate(self, gate_name: str, reason: str = "",
+                          reject_reasons: list | None = None,
+                          revision_guidance: str = ""):
         """Signal: a human rejected the current gate."""
         workflow.logger.info(
             "Signal reject_gate gate=%s reason=%s", gate_name, reason,
         )
-        self._gate_approved = gate_name  # unblock, but result will show rejection
+        self._gate_approved = gate_name  # unblock wait_condition
+        self._gate_decision = "reject"
+        self._gate_reject_reasons = reject_reasons or []
+        self._gate_revision_guidance = revision_guidance
+        # For Gate 0: set flag to route back to ANALYZING
+        self._gate_decision_reject = True
 
     @workflow.signal
     async def gate_timeout(self, gate_level: int, approver: str = ""):
@@ -553,7 +591,8 @@ class RequirementWorkflow:
         """Map a pipeline state to the primary agent ID."""
         _map = {
             RS.DRAFT: "A1",
-            RS.ANALYZING: "A1",
+            RS.ANALYZING: "A1",              # HTTP+SSE, not dispatched
+            RS.KNOWLEDGE_ANALYSIS: "A2",     # new A2 knowledge analysis
             RS.REVIEWING: "A5",
             RS.DECOMPOSING: "A6",
             RS.DEVELOPING: "A9",
@@ -643,18 +682,25 @@ class RequirementWorkflow:
         if current == RS.DRAFT:
             return RS.ANALYZING
 
-        # After ANALYZING -> Gate is between, TRANSITION_TABLE handles it
-        # After DESIGNING -> Gate 1
-        # After DECOMPOSING -> Gate 2
-        # After REVIEWING_CODE -> Gate 3
+        # KNOWNLEDGE_ANALYSIS with Gate 0 reject: back to ANALYZING
+        if current == RS.KNOWLEDGE_ANALYSIS:
+            # Gate 0 decision handled in _run_gate_stage — if rejected,
+            # _gate_decision_reject is set to True, go back to ANALYZING
+            if getattr(self, '_gate_decision_reject', False):
+                self._gate_decision_reject = False
+                workflow.logger.info(
+                    "Gate 0 rejected req=%s — returning to ANALYZING for revision", req_id,
+                )
+                return RS.ANALYZING
 
         # Simple linear for the rest
         _linear_next = {
-            RS.ANALYZING: RS.DESIGNING,       # via Gate 0 (but that's handled by wait_condition)
-            RS.DESIGNING: RS.REVIEWING,        # via Gate 1
-            RS.REVIEWING_CODE: RS.RELEASING,   # via Gate 3
+            RS.ANALYZING: RS.KNOWLEDGE_ANALYSIS,       # A1 -> A2
+            RS.KNOWLEDGE_ANALYSIS: RS.DESIGNING,       # Gate 0 pass
+            RS.DESIGNING: RS.REVIEWING,                # Gate 1 pass
+            RS.REVIEWING_CODE: RS.RELEASING,           # Gate 3 pass
             RS.DEVELOPING: RS.TESTING,
-            RS.DECOMPOSING: RS.DEVELOPING,     # via Gate 2
+            RS.DECOMPOSING: RS.DEVELOPING,             # Gate 2 pass
             RS.RELEASING: RS.DONE,
         }
         return _linear_next.get(current, RS.DONE)

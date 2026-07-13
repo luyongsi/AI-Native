@@ -247,3 +247,97 @@ export interface ChatResponse {
   options?: string[];
   spec_updates?: any[];
 }
+
+// ── Dialogue (A1 HTTP+SSE) types ─────────────────────────────────────
+
+export interface DialogueEvent {
+  type: 'thinking' | 'knowledge' | 'draft_update' | 'clarification' | 'wireframe' | 'done' | 'error';
+  content?: string;
+  draft?: RequirementDraft;
+  sources?: KnowledgeSource[];
+  items?: ClarificationItem[];
+  data?: WireframeData;
+  confidence_score?: number;
+  knowledge_sources?: KnowledgeSource[];
+  mcp_tools_used?: string[];
+  session_id?: string;
+  message_id?: number;
+}
+
+export interface RequirementDraft {
+  title: string;
+  description: string;
+  domain: string;
+  entities: DraftEntity[];
+  use_cases: string[];
+  acceptance_criteria: string[];
+  constraints: string[];
+  risks: string[];
+  estimated_cost: string | null;
+}
+
+export interface DraftEntity {
+  name: string;
+  attributes: string[];
+  description: string;
+}
+
+export interface KnowledgeSource {
+  name: string;
+  count?: number;
+  available?: boolean;
+}
+
+export interface ClarificationItem {
+  question: string;
+  suggestion: string;
+  field: string;
+}
+
+export interface WireframeData {
+  type: string;
+  pages: WireframePage[];
+  components: WireframeComponent[];
+  generated_at?: string;
+}
+
+export interface WireframePage {
+  id: string;
+  route: string;
+  title: string;
+  zones: string[];
+}
+
+export interface WireframeComponent {
+  page_id: string;
+  zone: string;
+  component: string;
+  type: string;
+  props: Record<string, any>;
+}
+
+export interface DialogueMessage {
+  id: number;
+  role: 'human' | 'ai' | 'system';
+  content: DialogueMessageContent;
+  timestamp: string | null;
+  sequence_number: number;
+}
+
+export interface DialogueMessageContent {
+  text?: string;
+  draft_preview?: Record<string, any>;
+  clarifications?: { question: string; suggestion: string }[];
+  type?: string;
+  reject_reasons?: { category: string; description: string }[];
+  revision_guidance?: string;
+  cycle?: number;
+}
+
+export interface DialogueCycle {
+  cycle: number;
+  status: string;
+  confirmed_at?: string;
+  messages: DialogueMessage[];
+  draft_snapshot?: RequirementDraft | null;
+}

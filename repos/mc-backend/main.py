@@ -138,11 +138,28 @@ async def lifespan(app: FastAPI):
         logger.info("[Redis] Connected for embedding cache")
     except Exception as e:
         logger.warning(f"[Redis] Connection failed for embeddings: {e}")
+
+    # Start Outbox Publisher (polls event_log for pending NATS messages)
+    from services.outbox_publisher import OutboxPublisher
+    global _outbox_publisher
+    _outbox_publisher = OutboxPublisher(DB_POOL, NATS_URL)
+    await _outbox_publisher.start()
+    logger.info("[Outbox] Publisher started")
+
+    # Start NATS subscriber for context.ready.A1 (Gate0 rejection -> session reopen)
+    from services.nats_subscriber import subscribe_context_ready_a1
+    _nats_sub_task = asyncio.create_task(
+        subscribe_context_ready_a1(DB_POOL, NATS_URL),
+    )
+    logger.info("[NATS] context.ready.A1 subscriber started")
+
     # Start background metrics collector
     bg_task = asyncio.create_task(metrics_collector_loop())
     yield
     # Shutdown
     bg_task.cancel()
+    _nats_sub_task.cancel()
+    await _outbox_publisher.stop()
     if REDIS_CLIENT:
         await REDIS_CLIENT.close()
     await stop_nats()
@@ -182,6 +199,8 @@ if _HAS_OTEL:
 # Mount API routers
 from api.dashboard import router as dashboard_router
 from api.requirements import router as requirements_router
+from api.dialogue import router as dialogue_router
+from api.dialogue import _requirements_status_router
 from api.agents import router as agents_router
 from api.approvals import router as approvals_router
 from api.tests import router as tests_router
@@ -193,6 +212,8 @@ from api.workflow import router as workflow_router
 
 app.include_router(dashboard_router)
 app.include_router(requirements_router)
+app.include_router(dialogue_router)
+app.include_router(_requirements_status_router)
 app.include_router(agents_router)
 app.include_router(approvals_router)
 app.include_router(tests_router)

@@ -12,26 +12,23 @@ from .states import RequirementState as RS
 # ── Gate map: which states must pass through a gate before advancing ────
 # Gates are placed after certain stages; the gate name is the key.
 GATE_MAP: dict[str, RS] = {
-    "analyze":    RS.ANALYZING,
-    "design":     RS.DESIGNING,
-    "review":     RS.REVIEWING,
-    "decompose":  RS.DECOMPOSING,
-    "develop":    RS.DEVELOPING,
-    "test":       RS.TESTING,
-    "code_review": RS.REVIEWING_CODE,
-    "release":    RS.RELEASING,
+    "analyze":         RS.KNOWLEDGE_ANALYSIS,   # Gate 0 after A2
+    "knowledge":       RS.KNOWLEDGE_ANALYSIS,   # alias
+    "design":          RS.DESIGNING,            # Gate 1
+    "review":          RS.REVIEWING,
+    "decompose":       RS.DECOMPOSING,          # Gate 2
+    "develop":         RS.DEVELOPING,
+    "test":            RS.TESTING,
+    "code_review":     RS.REVIEWING_CODE,       # Gate 3
+    "release":         RS.RELEASING,
 }
 
 # States that require gate approval before transitioning to the next stage.
 _GATED_STATES: set[RS] = {
-    RS.ANALYZING,
-    RS.DESIGNING,
-    RS.REVIEWING,
-    RS.DECOMPOSING,
-    RS.DEVELOPING,
-    RS.TESTING,
-    RS.REVIEWING_CODE,
-    RS.RELEASING,
+    RS.KNOWLEDGE_ANALYSIS,   # Gate 0 — after A2, before DESIGNING
+    RS.DESIGNING,            # Gate 1
+    RS.DECOMPOSING,          # Gate 2
+    RS.REVIEWING_CODE,       # Gate 3
 }
 
 
@@ -58,12 +55,12 @@ MAX_ROUNDS: dict[str, int] = {
 
 # Loop-context map: which loop types apply to which states.
 LOOP_CONTEXT: dict[RS, str] = {
-    RS.ANALYZING:      "inner",   # self-loop if analysis incomplete
-    RS.DESIGNING:       "debate",  # debate rounds: DESIGNING <-> REVIEWING
+    RS.KNOWLEDGE_ANALYSIS: "inner",  # A2 self-loop (retry once on timeout)
+    RS.DESIGNING:       "debate",    # debate rounds: DESIGNING <-> REVIEWING
     RS.REVIEWING:       "debate",
-    RS.DEVELOPING:      "inner",   # inner dev loop: DEVELOPING <-> TESTING
+    RS.DEVELOPING:      "inner",     # inner dev loop: DEVELOPING <-> TESTING
     RS.TESTING:         "inner",
-    RS.REVIEWING_CODE:  "outer",   # outer loop: back to DEVELOPING
+    RS.REVIEWING_CODE:  "outer",     # outer loop: back to DEVELOPING
 }
 
 

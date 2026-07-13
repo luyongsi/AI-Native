@@ -1,162 +1,144 @@
 """
 Mission Control Backend - Requirements API
-GET  /api/requirements       - List all requirements
-POST /api/requirements       - Create a new requirement
-GET  /api/requirements/{id}  - Get requirement detail with timeline
+  GET  /api/requirements       - List all requirements
+  POST /api/requirements       - Create a new requirement (pre-dialogue req_id)
+  GET  /api/requirements/{id}  - Get requirement detail
 
-Phase 4A (SPEC-40): Extended fields — stages, spec_sections, assignees, pm,
-description, sla_deadline, related_ids.
+Aligned with data dictionary v1.3 §3.1 — new requirements table schema.
 """
-from fastapi import APIRouter, HTTPException, Query
-from pydantic import BaseModel, Field
-from typing import Optional, List, Any
-from datetime import datetime, timezone
-import asyncpg
-import uuid
+from __future__ import annotations
+
 import json
+import uuid
+from datetime import datetime, timezone
+from typing import Optional
+
+import asyncpg
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
+from pydantic import BaseModel
 
 router = APIRouter(prefix="/api/requirements", tags=["requirements"])
 
-# ── Default pipeline stages inserted into spec on create ──────────────────
-DEFAULT_STAGES = [
-    {"key": "pool", "label": "需求池", "status": "done", "order": 0},
-    {"key": "designing", "label": "设计中", "status": "active", "order": 1},
-    {"key": "reviewing", "label": "评审中", "status": "pending", "order": 2},
-    {"key": "developing", "label": "开发中", "status": "pending", "order": 3},
-    {"key": "testing", "label": "测试中", "status": "pending", "order": 4},
-    {"key": "code_review", "label": "代码审查", "status": "pending", "order": 5},
-    {"key": "releasing", "label": "发布中", "status": "pending", "order": 6},
-    {"key": "done", "label": "已完成", "status": "pending", "order": 7},
-]
 
-DEFAULT_SPEC_SECTIONS = [
-    {"key": "overview", "label": "概述", "content": ""},
-    {"key": "acceptance", "label": "验收标准", "content": ""},
-    {"key": "tech_notes", "label": "技术备注", "content": ""},
-]
-
+# ── Models ──────────────────────────────────────────────────────────────
 
 class RequirementCreate(BaseModel):
-    title: str
-    priority: str = "medium"
-    source_type: str = "manual"
-    source_payload: Optional[dict] = None
-    description: Optional[str] = None
+    title: Optional[str] = None
 
 
-def _build_item(row, include_spec: bool = False) -> dict:
-    """Build a requirement response dict from a database row.
+# ── Helpers ─────────────────────────────────────────────────────────────
 
-    *include_spec* controls whether the full spec JSONB is attached
-    (used by the detail endpoint but excluded from list responses for
-    bandwidth reasons).
-    """
-    spec = row["spec"] if isinstance(row.get("spec"), dict) else {}
-
-    # ── Pipeline stages: map backend format → frontend format ─────
-    raw_stages = spec.get("stages") or DEFAULT_STAGES
-    stages = []
-    for s in raw_stages:
-        stages.append({
-            "name": s.get("label", s.get("name", "")),
-            "status": "done" if s.get("status") in ("done", "active") else ("in_progress" if s.get("status") == "active" else s.get("status", "pending")),
-            "duration": s.get("duration", "-"),
-            "baseline": s.get("baseline", "1h"),
-            "assignee": s.get("assignee", "-"),
-        })
-
-    # ── Spec sections: include from spec JSONB ──────────────────────
-    raw_sections = spec.get("spec_sections", spec.get("sections", DEFAULT_SPEC_SECTIONS))
-    spec_sections = []
-    for s in raw_sections:
-        spec_sections.append({
-            "id": s.get("key", s.get("id", "")),
-            "title": s.get("label", s.get("title", "")),
-            "status": s.get("status", "pending"),
-            "content": s.get("content", ""),
-            "history": s.get("history", []),
-        })
-
-    item: dict = {
-        "id": str(row["id"]),
-        "external_id": row.get("external_id"),
-        "title": row["title"],
-        "status": row["status"],
-        "priority": row["priority"],
-        "current_gate": row.get("current_gate"),
-        "ai_completion": row.get("ai_completion"),
-        "human_interventions": row.get("human_interventions"),
-        "blocked": row.get("blocked"),
-        "source_type": row.get("source_type"),
-        # ── New fields (SPEC-40) ──────────────────────────────────────
-        "stages": stages,
-        "specSections": spec_sections,          # camelCase for frontend
-        "spec_sections": spec_sections,          # snake_case for backward compat
-        "assignees": row.get("assignees") if isinstance(row.get("assignees"), list) else [],
-        "pm": row.get("pm") or "",
-        "description": row.get("description") or "",
-        "sla_deadline": row["sla_deadline"].isoformat() if row.get("sla_deadline") else None,
-        "related_ids": row.get("related_ids") if isinstance(row.get("related_ids"), list) else [],
-        # ── End new fields ────────────────────────────────────────────
-        "created_at": row["created_at"].isoformat() if row.get("created_at") else None,
-        "updated_at": row["updated_at"].isoformat() if row.get("updated_at") else None,
-    }
-    if include_spec:
-        item["spec"] = spec
-        item["tasks"] = row.get("tasks") if isinstance(row.get("tasks"), list) else []
-        item["block_reason"] = row.get("block_reason")
-        item["version"] = row.get("version")
-        item["source_payload"] = (
-            row.get("source_payload") if isinstance(row.get("source_payload"), dict) else {}
-        )
-    return item
-
-
-async def get_db() -> asyncpg.Connection:
+async def _get_conn() -> asyncpg.Connection:
     from main import DB_POOL
     return await DB_POOL.acquire()
 
 
-# ── Columns selected by list / detail queries ─────────────────────────────
-_BASE_COLS = """
-    id, external_id, title, status, priority, current_gate,
-    ai_completion, human_interventions, blocked, source_type,
-    spec, description, pm, assignees, sla_deadline, related_ids,
-    created_at, updated_at
-"""
+def _jwt_claims(authorization: Optional[str] = Header(None)) -> dict:
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing or invalid Authorization header")
+    token = authorization[7:]
+    try:
+        import jwt as pyjwt
+        claims = pyjwt.decode(token, options={"verify_signature": False})
+        return {"sub": claims.get("sub", "dev-user"), "name": claims.get("name", "Dev User")}
+    except Exception:
+        return {"sub": token[:50], "name": "Dev User"}
+
+
+def _row_to_dict(row) -> dict:
+    """Convert a new-schema requirements row to API response dict."""
+    if row is None:
+        return {}
+    draft = row.get("requirement_draft")
+    if isinstance(draft, str):
+        try:
+            draft = json.loads(draft)
+        except (json.JSONDecodeError, TypeError):
+            draft = None
+    title = row.get("title") or (draft.get("title") if isinstance(draft, dict) else None)
+    return {
+        "id": str(row["id"]),
+        "title": title,
+        "status": row["status"],
+        "confidence_score": float(row["confidence_score"]) if row.get("confidence_score") else None,
+        "requirement_draft": draft,
+        "creator_user_id": row.get("creator_user_id"),
+        "creator_name": row.get("creator_name"),
+        "analyzer_agent": row.get("analyzer_agent"),
+        "analyzed_at": row["analyzed_at"].isoformat() if row.get("analyzed_at") else None,
+        "gate_rejection_count": row.get("gate_rejection_count", 0),
+        "revision_count": row.get("revision_count", 0),
+        "last_revised_at": row["last_revised_at"].isoformat() if row.get("last_revised_at") else None,
+        "created_at": row["created_at"].isoformat() if row.get("created_at") else None,
+        "updated_at": row["updated_at"].isoformat() if row.get("updated_at") else None,
+    }
+
+
+# ══════════════════════════════════════════════════════════════════════════
+
+@router.post("")
+async def create_requirement(body: RequirementCreate, claims: dict = Depends(_jwt_claims)):
+    """Create a requirement record, returning req_id for subsequent dialogue.
+
+    Per data dictionary §1.2: user clicks "创建需求" → creates requirements row (status='draft').
+    Dialogue begins via POST /api/dialogue/chat which creates dialogue_sessions.
+    """
+    conn = await _get_conn()
+    try:
+        new_id = uuid.uuid4()
+        creator_id = claims.get("sub", "dev-user")
+        creator_name = claims.get("name", "Dev User")
+
+        title = body.title or None
+        draft = {"title": title} if title else {}
+
+        await conn.execute(
+            """INSERT INTO requirements
+               (id, title, status, requirement_draft, creator_user_id, creator_name)
+               VALUES ($1::uuid, $2, 'draft', $3::jsonb, $4, $5)""",
+            new_id,
+            title,
+            json.dumps(draft, ensure_ascii=False),
+            creator_id,
+            creator_name,
+        )
+        row = await conn.fetchrow(
+            "SELECT * FROM requirements WHERE id = $1::uuid", new_id,
+        )
+        result = _row_to_dict(row)
+        # Return with req_id alias for frontend compatibility
+        result["req_id"] = result["id"]
+        result["created_at"] = row["created_at"].isoformat() if row["created_at"] else None
+        return result
+    finally:
+        await conn.close()
 
 
 @router.get("")
 async def list_requirements(
     status: Optional[str] = Query(None),
-    priority: Optional[str] = Query(None),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
+    claims: dict = Depends(_jwt_claims),
 ):
-    conn = await get_db()
+    """List requirements with optional status filter."""
+    conn = await _get_conn()
     try:
         conditions = []
-        params = []
+        params: list = []
         idx = 1
         if status:
             conditions.append(f"status = ${idx}")
             params.append(status)
             idx += 1
-        if priority:
-            conditions.append(f"priority = ${idx}")
-            params.append(priority)
-            idx += 1
         where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
 
         params.extend([limit, offset])
         rows = await conn.fetch(
-            f"""
-            SELECT {_BASE_COLS}
-            FROM requirements
-            {where}
-            ORDER BY created_at DESC
-            LIMIT ${idx} OFFSET ${idx + 1}
-            """,
+            f"""SELECT * FROM requirements
+               {where}
+               ORDER BY created_at DESC
+               LIMIT ${idx} OFFSET ${idx + 1}""",
             *params,
         )
         total_row = await conn.fetchrow(
@@ -165,243 +147,82 @@ async def list_requirements(
         )
         total = total_row["cnt"] if total_row else 0
 
-        items = [_build_item(row) for row in rows]
-        return {"items": items, "total": total, "limit": limit, "offset": offset}
-    finally:
-        await conn.close()
-
-
-@router.post("")
-async def create_requirement(body: RequirementCreate):
-    conn = await get_db()
-    try:
-        new_id = uuid.uuid4()
-        now = datetime.now(timezone.utc)
-
-        # Build the spec JSONB with default stages and spec_sections
-        spec_payload = {
-            "source": body.source_type,
-            "stages": DEFAULT_STAGES,
-            "spec_sections": DEFAULT_SPEC_SECTIONS,
+        return {
+            "items": [_row_to_dict(r) for r in rows],
+            "total": total,
+            "limit": limit,
+            "offset": offset,
         }
-        if body.source_payload:
-            spec_payload["source_payload"] = body.source_payload
-
-        row = await conn.fetchrow(
-            """
-            INSERT INTO requirements (id, title, status, priority, current_gate,
-                spec, tasks, ai_completion, human_interventions, blocked, version,
-                source_type, source_payload, description, created_at, updated_at)
-            VALUES ($1, $2, 'pool', $3, 0, $4::jsonb, '[]'::jsonb, 0, 0, false, '1.0',
-                    $5, $6::jsonb, $7, $8, $8)
-            RETURNING id, external_id, title, status, priority, current_gate,
-                      ai_completion, human_interventions, blocked, source_type,
-                      spec, description, pm, assignees, sla_deadline, related_ids,
-                      created_at, updated_at
-            """,
-            new_id,
-            body.title,
-            body.priority,
-            json.dumps(spec_payload),
-            body.source_type,
-            json.dumps(body.source_payload) if body.source_payload else None,
-            body.description,
-            now,
-        )
-        return _build_item(row)
     finally:
         await conn.close()
 
 
 @router.get("/{req_id}")
-async def get_requirement_detail(req_id: str):
-    conn = await get_db()
+async def get_requirement_detail(req_id: str, claims: dict = Depends(_jwt_claims)):
+    """Get requirement detail with associated data."""
+    conn = await _get_conn()
     try:
         row = await conn.fetchrow(
-            f"""
-            SELECT r.*
-            FROM requirements r
-            WHERE r.id = $1::uuid
-            """,
-            req_id,
+            "SELECT * FROM requirements WHERE id = $1::uuid", req_id,
         )
         if not row:
             raise HTTPException(status_code=404, detail="Requirement not found")
 
-        req = _build_item(row, include_spec=True)
+        result = _row_to_dict(row)
 
-        # Approvals timeline
-        ga_rows = await conn.fetch(
-            """
-            SELECT * FROM gate_approvals
-            WHERE req_id = $1::uuid
-            ORDER BY created_at DESC
-            """,
+        # Load agent_results
+        ar_rows = await conn.fetch(
+            "SELECT agent_key, cycle, status, artifact FROM agent_results "
+            "WHERE req_id = $1::uuid ORDER BY cycle, agent_key",
             req_id,
         )
-        approvals = []
-        for ga in ga_rows:
-            approvals.append({
-                "id": str(ga["id"]),
-                "gate": ga["gate"],
-                "status": ga["status"],
-                "approver": ga["approver"],
-                "sla_deadline": ga["sla_deadline"].isoformat() if ga["sla_deadline"] else None,
-                "agent_reviews": ga["agent_reviews"] if isinstance(ga["agent_reviews"], dict) else {},
-                "reject_reasons": ga["reject_reasons"] if isinstance(ga["reject_reasons"], list) else [],
-                "created_at": ga["created_at"].isoformat() if ga["created_at"] else None,
-                "resolved_at": ga["resolved_at"].isoformat() if ga["resolved_at"] else None,
-            })
+        result["agent_results"] = [
+            {
+                "agent_key": r["agent_key"],
+                "cycle": r["cycle"],
+                "status": r["status"],
+                "artifact": r["artifact"] if isinstance(r["artifact"], dict) else {},
+            }
+            for r in ar_rows
+        ]
 
-        # Activity timeline
-        act_rows = await conn.fetch(
-            """
-            SELECT * FROM agent_activities
-            WHERE req_id = $1::uuid
-            ORDER BY created_at DESC
-            LIMIT 50
-            """,
+        # Load approvals
+        ap_rows = await conn.fetch(
+            "SELECT * FROM approvals WHERE req_id = $1::uuid ORDER BY cycle, created_at",
             req_id,
         )
-        activities = []
-        for a in act_rows:
-            activities.append({
-                "id": str(a["id"]),
-                "agent_id": a["agent_id"],
-                "agent_type": a["agent_type"],
-                "action": a["current_action"],
-                "status": a["status"],
-                "created_at": a["created_at"].isoformat() if a["created_at"] else None,
-            })
+        result["approvals"] = [
+            {
+                "id": str(r["id"]),
+                "gate_level": r["gate_level"],
+                "cycle": r["cycle"],
+                "status": r["status"],
+                "decision": r["decision"],
+                "reject_reasons": r["reject_reasons"] if isinstance(r.get("reject_reasons"), list) else [],
+                "revision_guidance": r.get("revision_guidance"),
+                "reviewer_name": r.get("reviewer_name"),
+                "reviewed_at": r["reviewed_at"].isoformat() if r.get("reviewed_at") else None,
+                "created_at": r["created_at"].isoformat() if r.get("created_at") else None,
+            }
+            for r in ap_rows
+        ]
 
-        req["approvals"] = approvals
-        req["activities"] = activities
-        return req
-    finally:
-        await conn.close()
-
-
-# ── Status update model ─────────────────────────────────────────────────
-
-class StatusUpdate(BaseModel):
-    status: str
-    new_state: Optional[str] = None
-    old_state: Optional[str] = None
-    event: Optional[dict] = None
-    agent_id: Optional[str] = None
-
-
-@router.put("/{req_id}/status")
-async def update_requirement_status(req_id: str, body: StatusUpdate):
-    """Update requirement status from Orchestrator (best-effort from notify_mc).
-
-    - Updates requirements.status to match workflow state
-    - Advances spec.stages: sets matching stage to 'active', prior to 'done'
-    - Inserts agent_activities audit row
-    """
-    conn = await get_db()
-    try:
-        # Verify requirement exists
-        row = await conn.fetchrow(
-            "SELECT id, spec FROM requirements WHERE id = $1::uuid",
+        # Load event_log entries for activity timeline
+        el_rows = await conn.fetch(
+            "SELECT id, event_name, direction, created_at FROM event_log "
+            "WHERE req_id = $1::uuid ORDER BY created_at DESC LIMIT 50",
             req_id,
         )
-        if not row:
-            raise HTTPException(status_code=404, detail="Requirement not found")
+        result["activities"] = [
+            {
+                "id": r["id"],
+                "event": r["event_name"],
+                "direction": r["direction"],
+                "created_at": r["created_at"].isoformat() if r.get("created_at") else None,
+            }
+            for r in el_rows
+        ]
 
-        spec = row.get("spec")
-        # asyncpg returns JSONB as a string; parse it first
-        if isinstance(spec, str):
-            try:
-                spec = json.loads(spec)
-            except (json.JSONDecodeError, TypeError):
-                spec = {}
-        if not isinstance(spec, dict):
-            spec = {}
-
-        # Advance stages: set matching new_state to 'active', previous active to 'done'
-        stages = spec.get("stages", [])
-        updated_stages = []
-        for s in stages:
-            key = s.get("key", "")
-            if key == body.new_state:
-                updated_stages.append({**s, "status": "active"})
-            elif s.get("status") == "active" and key != body.new_state:
-                updated_stages.append({**s, "status": "done"})
-            else:
-                updated_stages.append(s)
-        spec["stages"] = updated_stages
-
-        await conn.execute(
-            """UPDATE requirements
-               SET status = $1, spec = $2::jsonb, updated_at = NOW()
-               WHERE id = $3::uuid""",
-            body.status,
-            json.dumps(spec),
-            req_id,
-        )
-
-        # Insert audit record into agent_activities
-        if body.agent_id:
-            try:
-                await conn.execute(
-                    """INSERT INTO agent_activities (req_id, agent_id, agent_type,
-                       current_action, status, created_at)
-                       VALUES ($1::uuid, $2, $3, $4, $5, NOW())""",
-                    req_id,
-                    body.agent_id,
-                    "orchestrator",
-                    f"state: {body.old_state} -> {body.new_state}",
-                    body.status,
-                )
-            except Exception:
-                # agent_activities table might not exist or have different schema
-                pass
-
-        return {"ok": True, "req_id": req_id, "status": body.status}
-    finally:
-        await conn.close()
-
-
-class DecisionsUpdate(BaseModel):
-    decisions: dict = Field(..., description="{resolved: {decision_id: option}, source_gates: [1,2], approver: str}")
-
-
-@router.put("/{req_id}/decisions")
-async def update_requirement_decisions(req_id: str, body: DecisionsUpdate):
-    """Persist Gate approval decisions into spec.decisions JSONB.
-
-    Called by MC Backend when a human approves a gate with selected options.
-    The decisions are injected into the context for A9 (developing) and later agents.
-    """
-    conn = await get_db()
-    try:
-        row = await conn.fetchrow(
-            "SELECT id, spec FROM requirements WHERE id = $1::uuid",
-            req_id,
-        )
-        if not row:
-            raise HTTPException(status_code=404, detail="Requirement not found")
-
-        spec = row.get("spec")
-        if isinstance(spec, str):
-            try:
-                spec = json.loads(spec)
-            except (json.JSONDecodeError, TypeError):
-                spec = {}
-        if not isinstance(spec, dict):
-            spec = {}
-
-        decisions_data = body.decisions
-        decisions_data["approved_at"] = datetime.now(timezone.utc).isoformat()
-        spec["decisions"] = decisions_data
-
-        await conn.execute(
-            "UPDATE requirements SET spec = $1::jsonb, updated_at = NOW() WHERE id = $2::uuid",
-            json.dumps(spec),
-            req_id,
-        )
-
-        return {"ok": True, "req_id": req_id}
+        return result
     finally:
         await conn.close()

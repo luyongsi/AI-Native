@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>AI Native Pipeline Test Dashboard</title>
+<title>A1 Dialogue Test Dashboard</title>
 <style>
   :root {
     --bg: #0f1117;
@@ -15,547 +15,828 @@
     --red: #f85149;
     --blue: #58a6ff;
     --yellow: #d2991d;
+    --purple: #ab7df8;
+    --cyan: #56d4dd;
     font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
     color: var(--text);
     background: var(--bg);
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { max-width: 1300px; margin: 0 auto; padding: 20px; }
-  h1 { font-size: 1.4rem; margin-bottom: 4px; }
-  .subtitle { color: var(--text-dim); font-size: 0.85rem; margin-bottom: 16px; }
+  body { display: flex; height: 100vh; overflow: hidden; }
 
-  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 16px; margin-bottom: 14px; }
-  .card-header { font-weight: 600; margin-bottom: 10px; display: flex; align-items: center; gap: 8px; }
+  /* ── Left Sidebar ── */
+  .sidebar {
+    width: 320px; min-width: 280px; background: var(--surface);
+    border-right: 1px solid var(--border); display: flex; flex-direction: column;
+    overflow: hidden;
+  }
+  .sidebar-header {
+    padding: 16px; border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; gap: 10px;
+  }
+  .sidebar-header h1 { font-size: 1.1rem; white-space: nowrap; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+  .dot.green { background: var(--green); }
+  .dot.red { background: var(--red); }
+  .dot.yellow { background: var(--yellow); }
+  .status-row { display: flex; gap: 8px; padding: 8px 16px; flex-wrap: wrap; border-bottom: 1px solid var(--border); }
+  .status-tag { font-size: 0.7rem; padding: 2px 8px; border-radius: 4px; border: 1px solid var(--border); }
+  .status-tag.ok { color: var(--green); border-color: var(--green); }
+  .status-tag.ng { color: var(--red); border-color: var(--red); }
 
-  .status-bar { display: flex; gap: 10px; margin-bottom: 14px; flex-wrap: wrap; }
-  .status-item { padding: 6px 14px; border-radius: 6px; font-size: 0.85rem; background: var(--surface); border: 1px solid var(--border); }
-  .status-item.pass { border-color: var(--green); color: var(--green); }
-  .status-item.fail { border-color: var(--red); color: var(--red); }
-  .status-item.warn { border-color: var(--yellow); color: var(--yellow); }
+  .req-list { flex: 1; overflow-y: auto; }
+  .req-item {
+    padding: 12px 16px; border-bottom: 1px solid var(--border);
+    cursor: pointer; transition: background 0.15s;
+  }
+  .req-item:hover { background: rgba(88,166,255,0.06); }
+  .req-item.active { background: rgba(88,166,255,0.12); border-left: 3px solid var(--blue); }
+  .req-title { font-size: 0.9rem; font-weight: 500; margin-bottom: 4px; }
+  .req-meta { font-size: 0.72rem; color: var(--text-dim); display: flex; gap: 8px; }
+  .req-status {
+    font-size: 0.68rem; padding: 1px 6px; border-radius: 3px;
+    display: inline-block; text-transform: uppercase;
+  }
+  .req-status.draft { background: rgba(139,148,158,0.2); color: var(--text-dim); }
+  .req-status.analyzing_completed { background: rgba(63,185,80,0.15); color: var(--green); }
 
-  .controls { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
-  input, textarea { background: var(--bg); border: 1px solid var(--border); color: var(--text); padding: 8px 12px; border-radius: 6px; font-size: 0.9rem; }
-  input[type="text"] { width: 280px; }
-  textarea { width: 420px; height: 55px; resize: vertical; }
-  label { font-size: 0.85rem; color: var(--text-dim); display: flex; align-items: center; gap: 6px; cursor:pointer; }
-  button { background: var(--blue); color: #fff; border: none; padding: 8px 18px; border-radius: 6px; cursor: pointer; font-size: 0.9rem; font-weight: 500; }
+  .sidebar-footer { padding: 12px 16px; border-top: 1px solid var(--border); }
+  button {
+    background: var(--blue); color: #fff; border: none; padding: 8px 16px;
+    border-radius: 6px; cursor: pointer; font-size: 0.85rem; font-weight: 500;
+    transition: opacity 0.15s;
+  }
   button:hover { opacity: 0.85; }
-  button.stop { background: var(--red); }
-  button.small { padding: 4px 10px; font-size: 0.75rem; }
+  button:disabled { opacity: 0.4; cursor: not-allowed; }
   button.secondary { background: var(--border); color: var(--text); }
+  button.secondary.selected { background: var(--blue); color: #fff; border: 2px solid var(--green); }
+  button.confirm { background: var(--green); }
+  button.full { width: 100%; }
 
-  .flow { display: flex; flex-wrap: wrap; align-items: center; gap: 3px; margin: 8px 0; overflow-x: auto; padding-bottom: 6px; }
-  .node { padding: 8px 10px; border-radius: 8px; text-align: center; cursor: pointer; border: 2px solid var(--border); background: var(--bg); min-width: 68px; transition: all 0.2s; }
-  .node:hover { border-color: var(--blue); }
-  .node.completed { border-color: var(--green); }
-  .node.active { border-color: var(--blue); box-shadow: 0 0 14px rgba(88,166,255,0.35); }
-  .node.failed { border-color: var(--red); }
-  .node.pending { border-color: var(--border); opacity: 0.55; }
-  .node .icon { font-size: 1.0rem; }
-  .node .label { font-size: 0.7rem; font-weight: 600; margin-top: 1px; }
-  .node .detail { font-size: 0.65rem; color: var(--text-dim); }
-  .arrow { color: var(--text-dim); font-size: 1.0rem; }
+  button.send-answers-btn {
+    background: var(--green); color: #fff; border: none; padding: 8px 20px;
+    border-radius: 6px; cursor: pointer; font-size: 0.85rem; font-weight: 600;
+    transition: opacity 0.15s; width: 100%; margin-top: 4px;
+  }
+  button.send-answers-btn:hover { opacity: 0.85; }
+  button.send-answers-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 
-  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
-  .spinning { animation: pulse 1.0s infinite; }
+  /* ── Main Chat Area ── */
+  .main { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+  .main-header {
+    padding: 14px 20px; border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; gap: 12px;
+  }
+  .main-header h2 { font-size: 1.05rem; flex: 1; }
+  .main-header .session-id { font-size: 0.72rem; color: var(--text-dim); font-family: Consolas, monospace; }
 
-  .finding { padding: 8px 12px; border-radius: 6px; margin: 5px 0; border-left: 3px solid var(--border); cursor: pointer; }
-  .finding.error { border-left-color: var(--red); background: rgba(248,81,73,0.07); }
-  .finding.warning { border-left-color: var(--yellow); background: rgba(210,153,29,0.07); }
-  .finding.info { border-left-color: var(--blue); }
-  .finding .rule { font-weight: 600; font-size: 0.8rem; }
-  .finding .msg { font-size: 0.82rem; margin-top: 2px; }
-  .finding .meta { font-size: 0.72rem; color: var(--text-dim); margin-top: 3px; }
-  .finding .detail-panel { display: none; margin-top: 8px; padding: 8px; background: var(--bg); border-radius: 4px; font-size: 0.78rem; font-family: Consolas, monospace; white-space: pre-wrap; max-height: 280px; overflow-y: auto; }
+  .chat-area { flex: 1; overflow-y: auto; padding: 16px 20px; display: flex; flex-direction: column; gap: 12px; }
+  .chat-empty { color: var(--text-dim); text-align: center; margin-top: 80px; font-size: 0.9rem; line-height: 1.8; }
 
-  .history-row { display: flex; gap: 14px; padding: 6px 0; border-bottom: 1px solid var(--border); font-size: 0.82rem; align-items: center; }
-  .hl-done { background: rgba(63,185,80,0.12); color: var(--green); padding: 2px 8px; border-radius: 4px; font-size: 0.72rem; }
-  .hl-blocked { background: rgba(248,81,73,0.12); color: var(--red); padding: 2px 8px; border-radius: 4px; font-size: 0.72rem; }
+  /* ── Chat bubbles ── */
+  .msg { max-width: 85%; padding: 10px 14px; border-radius: 10px; font-size: 0.88rem; line-height: 1.5; }
+  .msg.user { align-self: flex-end; background: var(--blue); color: #fff; border-bottom-right-radius: 4px; }
+  .msg.ai { align-self: flex-start; background: var(--surface); border: 1px solid var(--border); border-bottom-left-radius: 4px; }
 
-  .tab-bar { display: flex; gap: 2px; margin-bottom: 8px; }
-  .tab { padding: 5px 14px; border-radius: 6px 6px 0 0; cursor: pointer; font-size: 0.82rem; border: 1px solid var(--border); border-bottom: none; background: var(--bg); }
-  .tab.active { background: var(--surface); color: var(--text); }
-  .tab:not(.active) { color: var(--text-dim); }
+  /* Draft card inside AI message */
+  .draft-card {
+    margin-top: 10px; background: var(--bg); border: 1px solid var(--border);
+    border-radius: 8px; overflow: hidden;
+  }
+  .draft-card .dc-header {
+    padding: 8px 12px; background: rgba(171,125,248,0.1); border-bottom: 1px solid var(--border);
+    font-size: 0.75rem; font-weight: 600; color: var(--purple);
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .draft-card .dc-body { padding: 10px 12px; font-size: 0.78rem; }
+  .dc-field { margin-bottom: 8px; }
+  .dc-field-key { color: var(--text-dim); font-size: 0.7rem; text-transform: uppercase; margin-bottom: 2px; }
+  .dc-field-val { color: var(--text); }
+  .dc-tags { display: flex; flex-wrap: wrap; gap: 4px; }
+  .dc-tag { font-size: 0.7rem; padding: 2px 8px; border-radius: 4px; background: var(--surface); border: 1px solid var(--border); }
 
-  .json-view { font-family: Consolas, monospace; font-size: 0.78rem; white-space: pre-wrap; max-height: 350px; overflow-y: auto; background: var(--bg); border-radius: 4px; padding: 10px; }
+  .ac-list { list-style: none; }
+  .ac-list li { padding: 3px 0; border-bottom: 1px solid rgba(255,255,255,0.04); font-size: 0.76rem; }
+
+  /* Knowledge sources */
+  .knowledge-badge {
+    display: inline-flex; align-items: center; gap: 4px;
+    font-size: 0.7rem; padding: 2px 8px; border-radius: 4px;
+    background: rgba(86,212,221,0.1); color: var(--cyan);
+    margin-right: 4px; margin-top: 4px;
+  }
+
+  /* Clarification items */
+  .clarify-item {
+    padding: 6px 10px; margin: 4px 0; border-radius: 6px;
+    background: rgba(210,153,29,0.07); border: 1px solid rgba(210,153,29,0.2);
+    font-size: 0.78rem;
+  }
+  .clarify-item .q { font-weight: 500; }
+  .clarify-item .s { color: var(--text-dim); margin-top: 2px; font-size: 0.74rem; }
+
+  /* Thinking indicator */
+  .thinking { font-size: 0.78rem; color: var(--text-dim); display: flex; align-items: center; gap: 8px; padding: 4px 0; }
+  .typing-dots { display: flex; gap: 4px; }
+  .typing-dots span { width: 5px; height: 5px; background: var(--text-dim); border-radius: 50%; animation: bounce 1.2s infinite; }
+  .typing-dots span:nth-child(2) { animation-delay: 0.2s; }
+  .typing-dots span:nth-child(3) { animation-delay: 0.4s; }
+  @keyframes bounce { 0%,60%,100% { transform: translateY(0); } 30% { transform: translateY(-6px); } }
+
+  /* Confidence badge */
+  .confidence {
+    display: inline-block; font-size: 0.75rem; font-weight: 600; padding: 2px 8px; border-radius: 4px;
+  }
+  .confidence.high { color: var(--green); background: rgba(63,185,80,0.1); }
+  .confidence.mid { color: var(--yellow); background: rgba(210,153,29,0.1); }
+  .confidence.low { color: var(--red); background: rgba(248,81,73,0.1); }
+
+  /* ── Input area ── */
+  .input-area {
+    padding: 12px 20px; border-top: 1px solid var(--border); display: flex; gap: 10px;
+  }
+  .input-area input {
+    flex: 1; background: var(--bg); border: 1px solid var(--border); color: var(--text);
+    padding: 10px 14px; border-radius: 8px; font-size: 0.9rem; outline: none;
+  }
+  .input-area input:focus { border-color: var(--blue); }
+
+  /* ── Create requirement modal ── */
+  .modal-overlay {
+    position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(0,0,0,0.6); display: flex; align-items: center; justify-content: center;
+    z-index: 100;
+  }
+  .modal {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+    padding: 24px; width: 440px; max-width: 90vw;
+  }
+  .modal h3 { margin-bottom: 16px; }
+  .modal input, .modal textarea {
+    width: 100%; background: var(--bg); border: 1px solid var(--border); color: var(--text);
+    padding: 10px 12px; border-radius: 6px; font-size: 0.9rem; margin-bottom: 10px;
+    outline: none; font-family: inherit;
+  }
+  .modal textarea { height: 80px; resize: vertical; }
+  .modal input:focus, .modal textarea:focus { border-color: var(--blue); }
+  .modal .btns { display: flex; gap: 8px; justify-content: flex-end; margin-top: 8px; }
+
+  /* Wireframe preview */
+  .wf-pages { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 6px; }
+  .wf-page {
+    background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+    padding: 8px 10px; font-size: 0.72rem; min-width: 100px;
+  }
+  .wf-page .route { color: var(--cyan); font-family: Consolas, monospace; }
+  .wf-page .zones { color: var(--text-dim); margin-top: 4px; }
+
+  /* Scrollbar */
+  ::-webkit-scrollbar { width: 6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+  /* Utility */
+  .error-box { color: var(--red); background: rgba(248,81,73,0.1); padding: 8px 12px; border-radius: 6px; font-size: 0.82rem; }
 </style>
 </head>
 <body>
 
-<h1>AI Native Pipeline Test Dashboard</h1>
-<div class="subtitle" id="server-info">Loading...</div>
-
-<div class="status-bar" id="status-bar">
-  <div class="status-item" id="st-spec">⏳ Spec</div>
-  <div class="status-item" id="st-infra">⏳ Infra</div>
-  <div class="status-item" id="st-nats">⏳ NATS</div>
-  <div class="status-item" id="st-running">Idle</div>
-</div>
-
-<div class="card">
-  <div class="card-header">Test Controls</div>
-  <div class="controls">
-    <input type="text" id="inp-title" placeholder="Requirement title">
-    <textarea id="inp-desc" placeholder="Description (optional)"></textarea>
-    <select id="sel-preset" style="background:var(--bg);border:1px solid var(--border);color:var(--text);padding:8px 10px;border-radius:6px;">
-      <option value="">Presets...</option>
-      <option value="login">User Login</option>
-      <option value="order">Order Management</option>
-    </select>
-    <label><input type="radio" name="gate" value="auto" checked> Auto Gate</label>
-    <label><input type="radio" name="gate" value="manual"> Manual Gate</label>
-    <label><input type="checkbox" id="chk-keep"> Keep Data</label>
-    <button id="btn-run">▶ Run</button>
-    <button id="btn-stop" class="stop" style="display:none">■ Stop</button>
-    <button id="btn-cleanup" class="secondary">🧹 Clean</button>
+<!-- ═══════════════ Sidebar ═══════════════ -->
+<div class="sidebar">
+  <div class="sidebar-header">
+    <h1>A1 Dialogue Tester</h1>
+    <span class="dot green" id="conn-dot" title="Server connection"></span>
   </div>
-  <div style="margin-top:6px;font-size:0.78rem;color:var(--text-dim)">
-    <input type="text" id="inp-diagnose" placeholder="Diagnose req-id..." style="width:300px">
-    <button id="btn-diagnose" class="secondary" style="margin-left:6px">🔍 Diagnose</button>
+  <div class="status-row" id="status-row">
+    <span class="status-tag" id="tag-spec">Spec ⏳</span>
+    <span class="status-tag" id="tag-pg">PG ⏳</span>
+    <span class="status-tag" id="tag-nats">NATS ⏳</span>
+    <span class="status-tag" id="tag-mc">MC ⏳</span>
+  </div>
+  <div style="padding:10px 16px;border-bottom:1px solid var(--border)">
+    <button class="full" onclick="showCreateModal()">+ New Requirement</button>
+  </div>
+  <div class="req-list" id="req-list">
+    <div style="padding:20px;text-align:center;color:var(--text-dim);font-size:0.82rem">Loading...</div>
+  </div>
+  <div class="sidebar-footer">
+    <div style="font-size:0.72rem;color:var(--text-dim)" id="footer-info">--</div>
   </div>
 </div>
 
-<div class="card" id="flow-card">
-  <div class="card-header">Pipeline State Flow <span id="flow-timer" style="color:var(--text-dim);font-size:0.78rem;margin-left:auto"></span></div>
-  <div class="flow" id="flow-container">Run a test to see live state flow</div>
-  <div style="font-size:0.7rem;color:var(--text-dim);margin-top:4px">
-    ✓=Completed ◉=Active ○=Pending ✗=Failed — Click any node for detail
+<!-- ═══════════════ Main ═══════════════ -->
+<div class="main" id="main-panel">
+  <div class="main-header">
+    <h2 id="main-title">Select a requirement to start</h2>
+    <span class="session-id" id="session-id-display"></span>
+    <button class="secondary" id="btn-confirm" style="display:none" onclick="confirmAnalysis()">Confirm & Persist</button>
   </div>
-</div>
-
-<div class="card" id="findings-card" style="display:none">
-  <div class="card-header">Findings <span id="findings-count"></span>
-    <div style="margin-left:auto;display:flex;gap:6px">
-      <button class="secondary small" onclick="filterFindings('all')">All</button>
-      <button class="secondary small" onclick="filterFindings('error')" style="color:var(--red)">Errors</button>
-      <button class="secondary small" onclick="filterFindings('warning')" style="color:var(--yellow)">Warnings</button>
+  <div class="chat-area" id="chat-area">
+    <div class="chat-empty">
+      <div style="font-size:2rem;margin-bottom:12px">&#x1F916;</div>
+      Select or create a requirement on the left to start talking with A1.
     </div>
   </div>
-  <div id="findings-list"></div>
-</div>
-
-<div class="card" id="detail-card" style="display:none">
-  <div class="card-header" id="detail-title">Node Detail</div>
-  <div class="tab-bar">
-    <div class="tab active" onclick="switchDetailTab('input')">📥 Context Input</div>
-    <div class="tab" onclick="switchDetailTab('output')">📤 Agent Output</div>
-    <div class="tab" onclick="switchDetailTab('llm')">🤖 LLM Calls</div>
-    <div class="tab" onclick="switchDetailTab('db')">🗄 DB State</div>
+  <div class="input-area" id="input-area" style="display:none">
+    <input type="text" id="inp-message" placeholder="Type your message to A1..."
+           onkeydown="if(event.key==='Enter')sendMessage()">
+    <button id="btn-send" onclick="sendMessage()">Send</button>
   </div>
-  <div id="detail-content"></div>
 </div>
 
-<div class="card">
-  <div class="card-header">Run History</div>
-  <div id="history-list">No runs yet</div>
+<!-- ═══════════════ Create Modal ═══════════════ -->
+<div class="modal-overlay" id="create-modal" style="display:none" onclick="if(event.target===this)hideCreateModal()">
+  <div class="modal">
+    <h3>New Requirement</h3>
+    <input type="text" id="new-title" placeholder="Requirement title (required)">
+    <textarea id="new-desc" placeholder="Description (optional, e.g. 'User login with password reset')"></textarea>
+    <div class="btns">
+      <button class="secondary" onclick="hideCreateModal()">Cancel</button>
+      <button onclick="createRequirement()">Create</button>
+    </div>
+  </div>
 </div>
 
 <script>
-// ═══════════════════════════════════════════════════════════════════
-// State
-// ═══════════════════════════════════════════════════════════════════
-let currentRunId = null;
-let eventSource = null;
-let timeline = [];
-let findings = [];
-let config = {};
-let detailNode = null; // {state, agent, seq}
-let activeFilter = 'all';
+// ═══════════════════════════════════════════════════════ State
+let currentReqId = null;
+let currentSessionId = null;
+let currentEvents = [];
+let requirements = [];
 
-// ═══════════════════════════════════════════════════════════════════
-// Init
-// ═══════════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════ Init
 async function init() {
-  document.getElementById('server-info').textContent =
-    `Server: ${window.location.hostname} · ${new Date().toISOString().slice(0,16)}`;
-  document.getElementById('inp-title').value = 'User login system';
-  document.getElementById('inp-desc').value = 'Implement username/password login with remember-me, password reset, and account lockout after 3 failed attempts';
-
-  document.getElementById('sel-preset').addEventListener('change', e => {
-    if (e.target.value === 'login') {
-      document.getElementById('inp-title').value = 'User login system';
-      document.getElementById('inp-desc').value = 'Implement username/password login with remember-me, password reset, and account lockout after 3 failed attempts';
-    } else if (e.target.value === 'order') {
-      document.getElementById('inp-title').value = 'Order management system';
-      document.getElementById('inp-desc').value = 'Implement order CRUD with status workflow, payment integration callback, and order history with pagination and filtering';
-    }
-  });
-
   await loadStatus();
-  await loadConfig();
-  await loadHistory();
-  renderFlow();
+  await loadRequirements();
+  setInterval(loadStatus, 30000);
+  setInterval(loadRequirements, 15000);
 }
+init();
 
+// ═══════════════════════════════════════════════════════ Status
 async function loadStatus() {
-  const r = await fetch('/api/tests/status').then(r => r.json()).catch(() => null);
-  if (!r) return;
-  updateStatusItem('st-spec', r.spec_self_check?.passed, 'Spec');
-  const infraOk = Object.values(r.infra||{}).filter(v => v && typeof v === 'object').every(v => v.passed);
-  updateStatusItem('st-infra', infraOk, 'Infra');
-  updateStatusItem('st-nats', r.preflight?.ready, 'NATS');
+  try {
+    const r = await fetch('/api/status').then(r => r.json());
+    updateTag('tag-spec', r.spec_self_check?.passed, 'Spec');
+    updateTag('tag-pg', r.infra?.postgresql?.passed, 'PG');
+    updateTag('tag-nats', r.infra?.nats?.passed, 'NATS');
+    updateTag('tag-mc', r.infra?.mc_backend?.passed, 'MC');
+    document.getElementById('conn-dot').className = 'dot green';
+  } catch(e) {
+    document.getElementById('conn-dot').className = 'dot red';
+  }
 }
-
-function updateStatusItem(id, ok, label) {
+function updateTag(id, ok, label) {
   const el = document.getElementById(id);
-  if (ok === null) { el.className = 'status-item'; el.textContent = label; return; }
-  el.className = `status-item ${ok ? 'pass' : 'fail'}`;
   el.textContent = (ok ? '✓ ' : '✗ ') + label;
+  el.className = `status-tag ${ok ? 'ok' : 'ng'}`;
 }
 
-async function loadConfig() {
-  config = await fetch('/api/tests/derived-config').then(r => r.json());
-  // Normalize: ensure all state names are UPPERCASE for matching
-  if (config.transitions) config.transitions = upperKeys(config.transitions);
-  if (config.state_agents) config.state_agents = upperKeys(config.state_agents);
-  if (config.parallel_states) config.parallel_states = upperKeys(config.parallel_states);
-  if (config.gated_states) config.gated_states = upperKeys(config.gated_states);
+// ═══════════════════════════════════════════════════════ Requirements
+async function loadRequirements() {
+  try {
+    const r = await fetch('/api/requirements?limit=50').then(r => r.json());
+    requirements = r.items || [];
+    renderReqList();
+  } catch(e) {}
 }
 
-function upperKeys(obj) {
-  if (!obj) return obj;
-  const out = {};
-  for (const [k, v] of Object.entries(obj)) out[k.toUpperCase()] = v;
-  return out;
-}
-
-// ═══════════════════════════════════════════════════════════════════
-// State Flow
-// ═══════════════════════════════════════════════════════════════════
-function renderFlow() {
-  const container = document.getElementById('flow-container');
-  if (!config.transitions) { container.innerHTML = '<span style="color:var(--text-dim)">Loading config...</span>'; return; }
-
-  const order = buildStateOrder();
-  container.innerHTML = '';
-  const stateStatus = getStateStatuses();
-
-  order.forEach((state, idx) => {
-    const status = stateStatus[state] || 'pending';
-    const agent = config.state_agents?.[state] || '';
-    const icon = {completed:'✓',active:'◉',failed:'✗',pending:'○',warning:'⚠'}[status] || '○';
-    const cls = `node ${status}`;
-
-    const div = document.createElement('div');
-    div.className = cls;
-    div.title = 'Click for LLM input/output details';
-    div.onclick = () => showNodeDetail(state, agent);
-    div.innerHTML = `<div class="icon${status==='active'?' spinning':''}">${icon}</div><div class="label">${state}</div><div class="detail">${agent||''}</div>`;
-    container.appendChild(div);
-
-    if (config.gated_states?.[state] !== undefined) {
-      const g = config.gated_states[state];
-      const arrow = document.createElement('span');
-      arrow.className = 'arrow'; arrow.textContent = '→';
-      container.appendChild(arrow);
-
-      const gNode = document.createElement('div');
-      const gStatus = stateStatus[`GATE_${g.level}`] || 'pending';
-      gNode.className = `node ${gStatus}`;
-      gNode.innerHTML = `<div class="icon">${gStatus==='active'?'◉':gStatus==='completed'?'✓':'○'}</div><div class="label">Gate ${g.level}</div>`;
-      container.appendChild(gNode);
-    }
-
-    if (idx < order.length - 1) {
-      const arrow = document.createElement('span');
-      arrow.className = 'arrow'; arrow.textContent = '→';
-      container.appendChild(arrow);
-    }
-  });
-}
-
-function buildStateOrder() {
-  const order = ['DRAFT'];
-  const visited = new Set(['DRAFT']);
-  let ptr = 0;
-  while (ptr < order.length) {
-    const cur = order[ptr];
-    const nexts = config.transitions[cur] || [];
-    for (const s of nexts) {
-      if (s !== 'BLOCKED' && !visited.has(s)) { visited.add(s); order.push(s); }
-    }
-    ptr++;
-  }
-  return order;
-}
-
-function getStateStatuses() {
-  const map = {};
-  for (const e of timeline) {
-    const st = (e.state || e.new_state || '').toUpperCase();
-    if (!st) continue;
-    if (e.event_type === 'agent_completed') map[st] = 'completed';
-    else if (e.event_type === 'context_built' && map[st] !== 'completed') map[st] = 'active';
-    else if (e.event_type === 'state_transition' || e.event_type === 'state_changed') map[st] = 'completed';
-  }
-  if (timeline.length > 0) {
-    const last = timeline[timeline.length - 1];
-    const cur = (last.state || last.new_state || '').toUpperCase();
-    if (cur && !map[cur]) map[cur] = 'active';
-  }
-  return map;
-}
-
-// ═══════════════════════════════════════════════════════════════════
-// Node Detail (LLM Input/Output)
-// ═══════════════════════════════════════════════════════════════════
-function showNodeDetail(state, agent) {
-  detailNode = { state, agent };
-
-  // Find matching events from timeline
-  const ctxEvt = timeline.find(e =>
-    (e.state||'').toUpperCase() === state && e.event_type === 'context_built'
-      && (e.agent||'').toUpperCase() === agent.toUpperCase()
-  ) || timeline.find(e =>
-    (e.state||'').toUpperCase() === state && e.event_type === 'context_built'
-  );
-
-  const resultEvt = timeline.find(e =>
-    (e.state||'').toUpperCase() === state && e.event_type === 'agent_completed'
-      && (e.agent||'').toUpperCase() === agent.toUpperCase()
-  ) || timeline.find(e =>
-    (e.state||'').toUpperCase() === state && e.event_type === 'agent_completed'
-  );
-
-  // Also get DB snapshot if available
-  const dbEvt = timeline.find(e =>
-    (e.state||'').toUpperCase() === state && e.event_type === 'state_transition'
-  );
-
-  detailNode.ctxEvt = ctxEvt;
-  detailNode.resultEvt = resultEvt;
-  detailNode.dbEvt = dbEvt;
-
-  document.getElementById('detail-card').style.display = 'block';
-  document.getElementById('detail-title').textContent =
-    `Node: ${state} ${agent ? '(' + agent + ')' : ''}`;
-  document.getElementById('detail-card').scrollIntoView({behavior:'smooth'});
-
-  // Default to input tab
-  document.querySelectorAll('#detail-card .tab').forEach(t => t.classList.remove('active'));
-  document.querySelector('#detail-card .tab').classList.add('active');
-  renderDetailTab('input');
-}
-
-function switchDetailTab(tab) {
-  document.querySelectorAll('#detail-card .tab').forEach(t => t.classList.remove('active'));
-  event.target.classList.add('active');
-  renderDetailTab(tab);
-}
-
-function renderDetailTab(tab) {
-  const el = document.getElementById('detail-content');
-  if (!detailNode) { el.innerHTML = 'No node selected'; return; }
-
-  if (tab === 'input') {
-    const ctx = detailNode.ctxEvt?.data?.context_snapshot || {};
-    if (ctx._raw) {
-      // If context was stored as raw string
-      el.innerHTML = `<div class="json-view">${escapeHtml(ctx._raw)}</div>`;
-    } else {
-      delete ctx.db_snapshot;
-      el.innerHTML = `<div class="json-view">Context Snapshot (from NATS dispatch payload):\n\n${JSON.stringify(ctx, null, 2)}</div>`;
-    }
-    if (!detailNode.ctxEvt) el.innerHTML += '<div style="color:var(--text-dim);margin-top:8px">No context snapshot captured for this state. The NATS dispatch message was consumed by the Agent before the Observer could capture it.</div>';
-  } else if (tab === 'output') {
-    const res = detailNode.resultEvt?.data?.result || {};
-    el.innerHTML = `<div class="json-view">Agent Output:\n\n${JSON.stringify(res, null, 2)}</div>`;
-    if (!detailNode.resultEvt) el.innerHTML += '<div style="color:var(--text-dim);margin-top:8px">No agent output captured yet.</div>';
-  } else if (tab === 'llm') {
-    el.innerHTML = '<div style="color:var(--text-dim)">LLM call details are available on the server at <code>/opt/ai-native/logs/llm_calls/</code>. View them via:<br><br>1. SSH to server<br>2. <code>python3 /opt/ai-native/testing-tool/view_llm_calls.py --agent ' + (detailNode.agent||'A1') + ' --req-id &lt;req_id&gt;</code></div>';
-  } else if (tab === 'db') {
-    const db = detailNode.dbEvt?.data?.db_snapshot || detailNode.ctxEvt?.data?.db_snapshot || {};
-    el.innerHTML = `<div class="json-view">DB Snapshot at this state:\n\n${JSON.stringify(db, null, 2)}</div>`;
-    if (!detailNode.dbEvt && !detailNode.ctxEvt?.data?.db_snapshot) el.innerHTML += '<div style="color:var(--text-dim);margin-top:8px">No DB snapshot available.</div>';
-  }
-}
-
-function escapeHtml(str) {
-  const d = document.createElement('div');
-  d.textContent = str;
-  return d.innerHTML;
-}
-
-// ═══════════════════════════════════════════════════════════════════
-// SSE
-// ═══════════════════════════════════════════════════════════════════
-function startObserve(runId) {
-  currentRunId = runId;
-  timeline = [];
-  findings = [];
-  document.getElementById('findings-card').style.display = 'block';
-  document.getElementById('detail-card').style.display = 'none';
-  document.getElementById('flow-timer').textContent = '';
-  renderFlow();
-  renderFindings();
-
-  eventSource = new EventSource(`/api/tests/stream/${runId}`);
-
-  eventSource.addEventListener('checkpoint', e => {
-    const d = JSON.parse(e.data);
-    timeline.push({
-      event_type: d.event_type,
-      state: (d.state||'').toUpperCase(),
-      agent: d.agent || '',
-      timestamp: new Date().toISOString(),
-      data: d
-    });
-    renderFlow();
-  });
-
-  eventSource.addEventListener('finding', e => {
-    const d = JSON.parse(e.data);
-    findings.push(d);
-    renderFindings();
-  });
-
-  eventSource.addEventListener('state-change', e => {
-    const d = JSON.parse(e.data);
-    timeline.push({
-      event_type: 'state_transition',
-      state: (d.to||'').toUpperCase(),
-      data: {from: (d.from||'').toUpperCase()},
-      timestamp: new Date().toISOString()
-    });
-    document.getElementById('flow-timer').textContent = `State: ${(d.to||'').toUpperCase()}`;
-    renderFlow();
-  });
-
-  eventSource.addEventListener('gate-approved', e => {
-    const d = JSON.parse(e.data);
-    timeline.push({event_type: 'gate_approved', gate: d.gate, timestamp: new Date().toISOString()});
-    renderFlow();
-  });
-
-  eventSource.addEventListener('run-complete', e => {
-    const d = JSON.parse(e.data);
-    document.getElementById('flow-timer').textContent =
-      `${d.final_state||'?'} · ${(d.total_duration_s||0).toFixed(0)}s · ${d.findings_count||0} findings`;
-    eventSource.close();
-    resetButtons();
-    loadHistory();
-  });
-
-  eventSource.addEventListener('run-error', e => {
-    const d = JSON.parse(e.data);
-    alert('Run error: ' + (d.error||'unknown'));
-    eventSource.close();
-    resetButtons();
-  });
-}
-
-// ═══════════════════════════════════════════════════════════════════
-// Findings
-// ═══════════════════════════════════════════════════════════════════
-function renderFindings() {
-  const list = document.getElementById('findings-list');
-  const filtered = activeFilter === 'all' ? findings : findings.filter(f => f.severity === activeFilter);
-  document.getElementById('findings-count').textContent =
-    `${findings.length} total · ${findings.filter(f=>f.severity==='error').length} errors · ${findings.filter(f=>f.severity==='warning').length} warnings`;
-
-  if (filtered.length === 0) {
-    list.innerHTML = '<div style="color:var(--text-dim);padding:8px">No findings matching filter</div>';
+function renderReqList() {
+  const el = document.getElementById('req-list');
+  if (requirements.length === 0) {
+    el.innerHTML = '<div style="padding:20px;text-align:center;color:var(--text-dim);font-size:0.82rem">No requirements yet. Click "+ New" to create one.</div>';
     return;
   }
-
-  list.innerHTML = filtered.slice().reverse().map((f, i) => {
-    const detailId = `fd-${i}`;
-    return `<div class="finding ${f.severity}" onclick="document.getElementById('${detailId}').style.display=document.getElementById('${detailId}').style.display==='block'?'none':'block'">
-      <div class="rule">${f.rule||'?'}</div>
-      <div class="msg">${f.message||''}</div>
-      <div class="meta">${(f.severity||'?').toUpperCase()} · Agent ${f.agent||'?'} · State ${f.state||'?'}</div>
-      <div class="detail-panel" id="${detailId}">${JSON.stringify({suggestion: f.suggestion, context: f.context_snapshot, db: f.db_snapshot}, null, 2)}</div>
+  el.innerHTML = requirements.map(r => {
+    const active = r.id === currentReqId ? ' active' : '';
+    const statusCls = r.status || 'draft';
+    const title = r.title || '(untitled)';
+    const score = r.confidence_score != null ? ` · ${Math.round(r.confidence_score*100)}%` : '';
+    return `<div class="req-item${active}" onclick="selectRequirement('${r.id}')">
+      <div class="req-title">${esc(title)}</div>
+      <div class="req-meta">
+        <span class="req-status ${statusCls}">${r.status || 'draft'}</span>
+        ${score}
+        <span>${(r.created_at||'').slice(0,10)}</span>
+      </div>
     </div>`;
   }).join('');
+  document.getElementById('footer-info').textContent = `${requirements.length} requirements`;
 }
 
-function filterFindings(filter) {
-  activeFilter = filter;
-  renderFindings();
+// ═══════════════════════════════════════════════════════ Selection
+async function selectRequirement(reqId) {
+  currentReqId = reqId;
+  currentSessionId = null;
+  currentEvents = [];
+  document.getElementById('chat-area').innerHTML = '<div class="chat-empty"><div class="typing-dots"><span></span><span></span><span></span></div>Loading session...</div>';
+  document.getElementById('input-area').style.display = 'none';
+  document.getElementById('btn-confirm').style.display = 'none';
+  document.getElementById('session-id-display').textContent = '';
+
+  // Find title
+  const req = requirements.find(r => r.id === reqId);
+  document.getElementById('main-title').textContent = req?.title || 'Requirement ' + reqId.slice(0,8);
+
+  // Load session
+  try {
+    const sess = await fetch(`/api/dialogue/current/${reqId}`).then(r => r.json());
+    if (sess.session_id) {
+      currentSessionId = sess.session_id;
+      document.getElementById('session-id-display').textContent = 'session: ' + sess.session_id.slice(0,8) + '...';
+      await loadHistory(sess.session_id);
+    } else {
+      document.getElementById('chat-area').innerHTML = '<div class="chat-empty"><div style="font-size:2rem;margin-bottom:12px">&#x1F4AC;</div>Start a conversation with A1.<br>Describe your requirement below.</div>';
+    }
+    document.getElementById('input-area').style.display = 'flex';
+    if (sess.status === 'completed') {
+      document.getElementById('input-area').style.display = 'none';
+      document.getElementById('btn-confirm').style.display = 'none';
+    }
+  } catch(e) {
+    document.getElementById('input-area').style.display = 'flex';
+    document.getElementById('chat-area').innerHTML = '<div class="chat-empty">Start a conversation with A1.</div>';
+  }
+
+  renderReqList();
+  document.getElementById('inp-message').focus();
 }
 
-// ═══════════════════════════════════════════════════════════════════
-// Buttons
-// ═══════════════════════════════════════════════════════════════════
-document.getElementById('btn-run').addEventListener('click', async () => {
-  const title = document.getElementById('inp-title').value.trim();
-  if (!title) return alert('Title required');
-  const desc = document.getElementById('inp-desc').value.trim();
-  const gate = document.querySelector('input[name="gate"]:checked').value;
-  const keep = document.getElementById('chk-keep').checked;
-
-  document.getElementById('btn-run').style.display = 'none';
-  document.getElementById('btn-stop').style.display = '';
-
-  const r = await fetch('/api/tests/run', {
-    method: 'POST', headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({title, description: desc, gate_strategy: gate, keep_data: keep}),
-  }).then(r => r.json());
-
-  if (!r.ok) { alert('Failed: ' + (r.error || r.preflight?.issues?.join(', ') || 'unknown')); resetButtons(); return; }
-
-  startObserve(r.run_id);
-});
-
-document.getElementById('btn-stop').addEventListener('click', () => {
-  if (eventSource) eventSource.close();
-  resetButtons();
-  loadStatus(); loadHistory();
-});
-
-function resetButtons() {
-  document.getElementById('btn-run').style.display = '';
-  document.getElementById('btn-stop').style.display = 'none';
+async function loadHistory(sessionId) {
+  try {
+    const h = await fetch(`/api/dialogue/history/${sessionId}`).then(r => r.json());
+    const cycles = h.cycles || [];
+    document.getElementById('chat-area').innerHTML = '';
+    for (const cycle of cycles) {
+      // Show human messages (skip flat AI messages — we'll render drafts)
+      for (const msg of (cycle.messages || [])) {
+        if (msg.role === 'human') {
+          appendUserMessage(msg.content?.text || '');
+        }
+      }
+      // Show draft snapshot with conversational UI (summary, draft card, questions)
+      if (cycle.draft_snapshot) {
+        appendDraftUpdate(cycle.draft_snapshot);
+      }
+      if (cycle.status === 'completed') {
+        appendSystemMsg('Analysis confirmed. Status: analyzing_completed');
+      }
+    }
+    // Show confirm button only for active/reopened sessions
+    if (h.cycles?.length > 0 && h.cycles[h.cycles.length-1].status !== 'completed') {
+      const sess = await fetch(`/api/dialogue/current/${currentReqId}`).then(r => r.json());
+      if (sess.status === 'active' || sess.status === 'reopened') {
+        document.getElementById('btn-confirm').style.display = 'inline-block';
+      }
+    }
+  } catch(e) {
+    document.getElementById('chat-area').innerHTML = '<div class="chat-empty">Start a conversation with A1.</div>';
+  }
+  scrollChat();
 }
 
-// ═══════════════════════════════════════════════════════════════════
-// History
-// ═══════════════════════════════════════════════════════════════════
-async function loadHistory() {
-  const r = await fetch('/api/tests/history').then(r => r.json()).catch(() => ({items:[]}));
-  const list = document.getElementById('history-list');
-  if (r.items.length === 0) { list.innerHTML = 'No runs yet'; return; }
-  list.innerHTML = r.items.map(h => {
-    const cls = h.final_state === 'done' ? 'hl-done' : 'hl-blocked';
-    return `<div class="history-row">
-      <span>${(h.started_at||'').slice(0,19)}</span>
-      <span style="flex:1">${h.title||''}</span>
-      <span class="${cls}">${h.final_state||'?'}</span>
-      <span>${Math.round(h.total_duration_s||0)}s</span>
-      <button class="small secondary" onclick="viewHistoryRun('${h.run_id}')">View</button>
-    </div>`;
-  }).join('');
+// ═══════════════════════════════════════════════════════ Messaging
+async function sendMessage() {
+  const inp = document.getElementById('inp-message');
+  const msg = inp.value.trim();
+  if (!msg || !currentReqId) return;
+  inp.value = '';
+  document.getElementById('btn-send').disabled = true;
+  document.getElementById('btn-confirm').style.display = 'none';
+
+  // Remove old question buttons
+  document.querySelectorAll('.question-buttons').forEach(e => e.remove());
+
+  appendUserMessage(msg);
+  const thinkingEl = appendThinking();
+
+  // Check if this is the first message for this requirement
+  let body = { req_id: currentReqId, message: msg };
+  if (currentSessionId) body.session_id = currentSessionId;
+
+  try {
+    const resp = await fetch('/api/dialogue/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+
+    if (!resp.ok) {
+      throw new Error(`HTTP ${resp.status}`);
+    }
+
+    thinkingEl.remove();
+
+    // Read SSE stream
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let draftData = null;
+    let knowledgeSources = null;
+    let wireframeData = null;
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+      for (const line of lines) {
+        if (line.startsWith('data: ')) {
+          try {
+            const evt = JSON.parse(line.slice(6));
+            handleSSEEvent(evt);
+            if (evt.type === 'draft_update') draftData = evt.draft;
+            if (evt.type === 'knowledge') knowledgeSources = evt.sources;
+            if (evt.type === 'wireframe') wireframeData = evt.data;
+            if (evt.type === 'done') {
+              // Collect the done event data
+              if (evt.draft) draftData = evt.draft;
+              knowledgeSources = evt.knowledge_sources || knowledgeSources;
+            }
+          } catch(e) { /* skip malformed */ }
+        }
+      }
+    }
+
+    // If we never got a done/draft_update but have draft from previous messages
+  } catch(e) {
+    thinkingEl.remove();
+    appendError('Failed to communicate with A1: ' + e.message);
+  }
+
+  document.getElementById('btn-send').disabled = false;
+  document.getElementById('inp-message').focus();
+  scrollChat();
+
+  // Reload session info to get session_id if it was new
+  if (!currentSessionId) {
+    try {
+      const sess = await fetch(`/api/dialogue/current/${currentReqId}`).then(r => r.json());
+      if (sess.session_id) {
+        currentSessionId = sess.session_id;
+        document.getElementById('session-id-display').textContent = 'session: ' + sess.session_id.slice(0,8) + '...';
+      }
+    } catch(e) {}
+  }
+
+  // Show confirm button if session is active
+  if (currentSessionId) {
+    document.getElementById('btn-confirm').style.display = 'inline-block';
+  }
 }
 
-async function viewHistoryRun(runId) {
-  const r = await fetch(`/api/tests/results/${runId}`).then(r => r.json());
-  timeline = r.timeline || [];
-  findings = r.findings || [];
-  currentRunId = runId;
-  document.getElementById('findings-card').style.display = 'block';
-  document.getElementById('flow-timer').textContent =
-    `${r.final_state||'?'} · ${Math.round(r.total_duration_s||0)}s`;
-  renderFlow();
-  renderFindings();
+function handleSSEEvent(evt) {
+  // Remove any old thinking indicators
+  document.querySelectorAll('.thinking').forEach(e => e.remove());
+
+  switch (evt.type) {
+    case 'thinking':
+      appendThinking().textContent = '🤔 ' + esc(evt.content || '');
+      break;
+    case 'knowledge':
+      appendKnowledgeBadges(evt.sources || []);
+      break;
+    case 'draft_update':
+      // Only show first draft_update (the conversational one), skip streaming intermediates
+      if (!document.querySelector('.draft-card') && !document.querySelector('.question-buttons')) {
+        appendDraftUpdate(evt.draft || evt);
+      }
+      break;
+    case 'clarification':
+      appendClarifications(evt.items || []);
+      break;
+    case 'wireframe':
+      appendWireframe(evt.data);
+      break;
+    case 'done':
+      appendDoneMessage(evt);
+      break;
+    case 'error':
+      appendError(evt.content || 'Unknown error');
+      break;
+  }
 }
 
-// ═══════════════════════════════════════════════════════════════════
-// Cleanup / Diagnose
-// ═══════════════════════════════════════════════════════════════════
-document.getElementById('btn-cleanup').addEventListener('click', async () => {
-  if (!confirm('Delete ALL test data?')) return;
-  const r = await fetch('/api/cleanup', {method:'POST'}).then(r => r.json());
-  alert(JSON.stringify(r, null, 2));
-});
+// ═══════════════════════════════════════════════════════ Chat rendering
+function appendUserMessage(text) {
+  const el = document.createElement('div');
+  el.className = 'msg user';
+  el.textContent = text;
+  document.getElementById('chat-area').appendChild(el);
+  scrollChat();
+}
 
-document.getElementById('btn-diagnose').addEventListener('click', async () => {
-  const reqId = document.getElementById('inp-diagnose').value.trim();
-  if (!reqId) return;
-  const r = await fetch(`/api/diagnose/${reqId}`).then(r => r.json());
-  alert(JSON.stringify(r, null, 2));
-});
+function appendAIMessage(content) {
+  const el = document.createElement('div');
+  el.className = 'msg ai';
+  if (content.text) {
+    el.innerHTML = esc(content.text);
+  }
+  if (content.draft_preview) {
+    const p = content.draft_preview;
+    el.innerHTML = [
+      `Analysis complete.`,
+      p.title ? `Title: <b>${esc(p.title)}</b>` : '',
+      p.domain ? `Domain: ${esc(p.domain)}` : '',
+      p.entities_count != null ? `Entities: ${p.entities_count}` : '',
+      p.use_cases_count != null ? `Use cases: ${p.use_cases_count}` : '',
+      p.acceptance_criteria_count != null ? `Acceptance criteria: ${p.acceptance_criteria_count}` : '',
+    ].filter(Boolean).join('<br>');
+  }
+  if (content.clarifications?.length) {
+    for (const c of content.clarifications) {
+      el.innerHTML += `<div class="clarify-item"><div class="q">${esc(c.question)}</div><div class="s">Suggestion: ${esc(c.suggestion)}</div></div>`;
+    }
+  }
+  document.getElementById('chat-area').appendChild(el);
+  return el;
+}
 
-init();
+function appendThinking() {
+  const el = document.createElement('div');
+  el.className = 'thinking';
+  el.innerHTML = '<div class="typing-dots"><span></span><span></span><span></span></div> Thinking...';
+  document.getElementById('chat-area').appendChild(el);
+  scrollChat();
+  return el;
+}
+
+function appendKnowledgeBadges(sources) {
+  const existing = document.querySelector('.knowledge-row');
+  if (existing) existing.remove();
+  const el = document.createElement('div');
+  el.className = 'knowledge-row';
+  el.style.cssText = 'padding:4px 0;font-size:0.74rem';
+  sources.forEach(s => {
+    const badge = document.createElement('span');
+    badge.className = 'knowledge-badge';
+    badge.textContent = s.count ? `${s.name} (${s.count})` : s.name;
+    el.appendChild(badge);
+  });
+  document.getElementById('chat-area').appendChild(el);
+  scrollChat();
+}
+
+function appendDraftUpdate(draft) {
+  if (!draft) return;
+
+  // Remove old draft cards and question buttons for cleanliness
+  document.querySelectorAll('.draft-card, .question-buttons, .summary-bubble').forEach(e => e.remove());
+
+  // Show summary first (conversational confirmation)
+  if (draft.summary) {
+    const el = document.createElement('div');
+    el.className = 'msg ai summary-bubble';
+    el.textContent = draft.summary;
+    document.getElementById('chat-area').appendChild(el);
+  }
+
+  // Show mode badge
+  if (draft.mode) {
+    const modeLabel = { clarify: 'Needs more info', draft: 'Almost ready', ready: 'Ready to confirm' }[draft.mode] || '';
+    if (modeLabel) {
+      const badge = document.createElement('div');
+      badge.style.cssText = `text-align:center;font-size:0.72rem;padding:4px;color:${draft.mode==='ready'?'var(--green)':draft.mode==='draft'?'var(--yellow)':'var(--text-dim)'};margin:4px 0`;
+      badge.textContent = 'Status: ' + modeLabel;
+      document.getElementById('chat-area').appendChild(badge);
+    }
+  }
+
+  // Show the draft card
+  appendDraftCard(draft, null, null, null, draft.confidence_score);
+
+  // Show guided questions as clickable buttons
+  if (draft.questions?.length) {
+    const qEl = document.createElement('div');
+    qEl.className = 'msg ai question-buttons';
+    qEl.innerHTML = '<div style="font-weight:500;margin-bottom:6px">' + esc(draft.mode === 'ready' ? 'A few final things to confirm:' : 'Help me understand better:') + '</div>';
+    draft.questions.forEach((q, qi) => {
+      qEl.innerHTML += `<div style="margin-bottom:8px">
+        <div style="font-weight:500;margin-bottom:4px">${esc(q.question)}</div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap">${(q.options||[]).map((opt, oi) =>
+          `<button class="secondary opt-btn" onclick="quickAnswer('${esc(q.field)}','${esc(opt)}')">${esc(opt)}</button>`
+        ).join('')}</div>
+      </div>`;
+    });
+    // Clear old input when showing new questions
+    document.getElementById('inp-message').value = '';
+    qEl.innerHTML += '<div style="margin-top:10px"><button class="send-answers-btn" onclick="submitAnswers()">Send Answers</button></div>';
+    document.getElementById('chat-area').appendChild(qEl);
+  }
+
+  // If ready, show confirm prompt
+  if (draft.mode === 'ready') {
+    const confirmEl = document.createElement('div');
+    confirmEl.style.cssText = 'text-align:center;padding:10px;margin:8px 0';
+    confirmEl.innerHTML = '<span style="color:var(--green);font-weight:500">Looks good! You can confirm by clicking "Confirm & Persist" above, or type more details below.</span>';
+    document.getElementById('chat-area').appendChild(confirmEl);
+  }
+
+  scrollChat();
+}
+
+function quickAnswer(field, option) {
+  // Toggle selected state on the clicked button
+  const allBtns = document.querySelectorAll('.opt-btn');
+  allBtns.forEach(b => {
+    if (b.textContent.trim() === option) {
+      b.classList.toggle('selected');
+    }
+  });
+  // Don't auto-send — user clicks "Send Answers" when ready
+}
+
+function submitAnswers() {
+  const inp = document.getElementById('inp-message');
+  const selected = [];
+  document.querySelectorAll('.opt-btn.selected').forEach(b => {
+    selected.push(b.textContent.trim());
+  });
+  if (selected.length === 0) {
+    // If nothing selected, use whatever text is in the input
+    if (!inp.value.trim()) return;
+  } else {
+    inp.value = selected.map(s => '我选择：' + s).join('\n');
+  }
+  document.getElementById('btn-send').click();
+}
+
+function appendDraftCard(draft, knowledge, clarifications, wireframe, confidence) {
+  if (!draft || (!draft.title && !draft.description)) return;
+  const d = draft;
+  let html = '<div class="draft-card">';
+  html += '<div class="dc-header">';
+  html += '<span>Draft: ' + esc(d.title || '(untitled)') + '</span>';
+  if (confidence != null) {
+    const cls = confidence >= 0.8 ? 'high' : confidence >= 0.6 ? 'mid' : 'low';
+    html += `<span class="confidence ${cls}">${Math.round(confidence*100)}%</span>`;
+  }
+  html += '</div><div class="dc-body">';
+
+  if (d.description) html += `<div class="dc-field"><div class="dc-field-key">Description</div><div class="dc-field-val">${esc(d.description)}</div></div>`;
+  if (d.domain) html += `<div class="dc-field"><div class="dc-field-key">Domain</div><div class="dc-field-val">${esc(d.domain)}</div></div>`;
+
+  if (d.entities?.length) {
+    html += '<div class="dc-field"><div class="dc-field-key">Entities</div><div class="dc-tags">';
+    d.entities.forEach(e => {
+      const name = typeof e === 'object' ? e.name : e;
+      const attrs = typeof e === 'object' && e.attributes ? ` (${e.attributes.join(', ')})` : '';
+      html += `<span class="dc-tag">${esc(name)}${esc(attrs)}</span>`;
+    });
+    html += '</div></div>';
+  }
+
+  if (d.use_cases?.length) {
+    html += `<div class="dc-field"><div class="dc-field-key">Use Cases (${d.use_cases.length})</div>`;
+    html += '<div class="dc-tags">' + d.use_cases.map(u => `<span class="dc-tag">${esc(u)}</span>`).join('') + '</div></div>';
+  }
+
+  if (d.acceptance_criteria?.length) {
+    html += `<div class="dc-field"><div class="dc-field-key">Acceptance Criteria (${d.acceptance_criteria.length})</div>`;
+    html += '<ul class="ac-list">' + d.acceptance_criteria.map(a => `<li>${esc(a)}</li>`).join('') + '</ul></div>';
+  }
+
+  if (d.constraints?.length) {
+    html += `<div class="dc-field"><div class="dc-field-key">Constraints</div><div class="dc-tags">`;
+    html += d.constraints.map(c => `<span class="dc-tag">${esc(c)}</span>`).join('');
+    html += '</div></div>';
+  }
+
+  if (d.risks?.length) {
+    html += `<div class="dc-field"><div class="dc-field-key">Risks</div><div class="dc-tags">`;
+    html += d.risks.map(r => `<span class="dc-tag">${esc(r)}</span>`).join('');
+    html += '</div></div>';
+  }
+
+  if (d.estimated_cost) {
+    html += `<div class="dc-field"><div class="dc-field-key">Estimated Cost</div><div class="dc-field-val">${esc(String(d.estimated_cost))}</div></div>`;
+  }
+
+  html += '</div></div>';
+
+  const el = document.createElement('div');
+  el.className = 'msg ai';
+  el.innerHTML = html;
+  document.getElementById('chat-area').appendChild(el);
+  scrollChat();
+  return el;
+}
+
+function appendClarifications(items) {
+  if (!items.length) return;
+  const el = document.createElement('div');
+  el.className = 'msg ai';
+  el.innerHTML = '<div style="font-weight:500;margin-bottom:4px">Clarification Questions:</div>' +
+    items.map(c => `<div class="clarify-item"><div class="q">${esc(c.question)}</div><div class="s">Suggestion: ${esc(c.suggestion)}</div><div style="font-size:0.68rem;color:var(--text-dim);margin-top:2px">Field: ${esc(c.field)}</div></div>`).join('');
+  document.getElementById('chat-area').appendChild(el);
+  scrollChat();
+}
+
+function appendWireframe(data) {
+  if (!data?.pages?.length) return;
+  const el = document.createElement('div');
+  el.className = 'msg ai';
+  let html = '<div style="font-weight:500;margin-bottom:4px">Wireframe</div><div class="wf-pages">';
+  data.pages.forEach(p => {
+    html += `<div class="wf-page"><div class="route">${esc(p.route)}</div><div style="font-size:0.75rem;font-weight:500;margin:2px 0">${esc(p.title)}</div><div class="zones">${(p.zones||[]).join(', ')}</div></div>`;
+  });
+  html += '</div>';
+  el.innerHTML = html;
+  document.getElementById('chat-area').appendChild(el);
+  scrollChat();
+}
+
+function appendDoneMessage(evt) {
+  const el = document.createElement('div');
+  el.className = 'msg ai';
+  let html = `<div style="font-weight:500">Analysis Complete</div>`;
+  html += `<div style="margin-top:4px;font-size:0.8rem">Confidence: <span class="confidence ${evt.confidence_score >= 0.8 ? 'high' : evt.confidence_score >= 0.6 ? 'mid' : 'low'}">${Math.round((evt.confidence_score||0)*100)}%</span></div>`;
+  if (evt.mcp_tools_used?.length) {
+    html += `<div style="margin-top:4px;font-size:0.72rem;color:var(--text-dim)">MCP tools: ${evt.mcp_tools_used.join(', ')}</div>`;
+  }
+  el.innerHTML = html;
+  document.getElementById('chat-area').appendChild(el);
+  scrollChat();
+}
+
+function appendError(msg) {
+  const el = document.createElement('div');
+  el.className = 'error-box';
+  el.textContent = msg;
+  document.getElementById('chat-area').appendChild(el);
+  scrollChat();
+}
+
+function appendSystemMsg(msg) {
+  const el = document.createElement('div');
+  el.style.cssText = 'text-align:center;font-size:0.75rem;color:var(--text-dim);padding:8px;border-top:1px solid var(--border);border-bottom:1px solid var(--border);margin:8px 0';
+  el.textContent = msg;
+  document.getElementById('chat-area').appendChild(el);
+}
+
+// ═══════════════════════════════════════════════════════ Confirm
+async function confirmAnalysis() {
+  if (!currentSessionId) return;
+  document.getElementById('btn-confirm').disabled = true;
+  try {
+    const r = await fetch('/api/dialogue/confirm', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session_id: currentSessionId }),
+    }).then(r => r.json());
+    if (r.ok) {
+      appendSystemMsg('Analysis confirmed. Status: analyzing_completed');
+      document.getElementById('input-area').style.display = 'none';
+      document.getElementById('btn-confirm').style.display = 'none';
+      await loadRequirements();
+    } else {
+      appendError('Confirm failed: ' + JSON.stringify(r));
+    }
+  } catch(e) {
+    appendError('Confirm error: ' + e.message);
+  }
+  document.getElementById('btn-confirm').disabled = false;
+}
+
+// ═══════════════════════════════════════════════════════ Create
+function showCreateModal() { document.getElementById('create-modal').style.display = 'flex'; document.getElementById('new-title').focus(); }
+function hideCreateModal() { document.getElementById('create-modal').style.display = 'none'; }
+async function createRequirement() {
+  const title = document.getElementById('new-title').value.trim();
+  if (!title) return alert('Title is required');
+  const desc = document.getElementById('new-desc').value.trim();
+  try {
+    const r = await fetch('/api/requirements', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title, description: desc }),
+    }).then(r => r.json());
+    if (r.id || r.req_id) {
+      hideCreateModal();
+      document.getElementById('new-title').value = '';
+      document.getElementById('new-desc').value = '';
+      await loadRequirements();
+      selectRequirement(r.req_id || r.id);
+    } else {
+      alert('Failed: ' + JSON.stringify(r));
+    }
+  } catch(e) {
+    alert('Error: ' + e.message);
+  }
+}
+
+// ═══════════════════════════════════════════════════════ Helpers
+function esc(s) {
+  if (!s) return '';
+  const d = document.createElement('div');
+  d.textContent = typeof s === 'string' ? s : JSON.stringify(s);
+  return d.innerHTML;
+}
+function scrollChat() {
+  const area = document.getElementById('chat-area');
+  area.scrollTop = area.scrollHeight;
+}
 </script>
 </body>
 </html>

@@ -87,6 +87,109 @@ export const api = {
       body: JSON.stringify(data),
     }),
 
+  // ── Dialogue (A1 HTTP+SSE) ────────────────────────────────────────
+  createDialogueRequirement: (title?: string) =>
+    fetchApi<{ req_id: string; status: string; title: string | null; created_at: string }>(
+      '/api/requirements',
+      {
+        method: 'POST',
+        body: JSON.stringify({ title: title || '' }),
+      }
+    ),
+
+  sendDialogueMessage: (
+    reqId: string,
+    message: string,
+    sessionId: string | null,
+    onEvent: (event: DialogueEvent) => void,
+  ): Promise<void> => {
+    const BASE_URL = process.env.NEXT_PUBLIC_API_URL || '';
+    return new Promise<void>((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', `${BASE_URL}/api/dialogue/chat`);
+      xhr.setRequestHeader('Content-Type', 'application/json');
+
+      let lastProcessedPos = 0;
+      // Track accumulated draft across stream
+      let accumulatedDraft: any = null;
+
+      xhr.onprogress = () => {
+        const newText = xhr.responseText.substring(lastProcessedPos);
+        lastProcessedPos = xhr.responseText.length;
+
+        const lines = newText.split('\n');
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue;
+          const dataStr = line.slice(6).trim();
+          if (!dataStr) continue;
+          try {
+            const event = JSON.parse(dataStr);
+            // 'draft_update' events carry full draft in event.draft
+            if (event.draft && !event.type) {
+              // Inline draft from draft_update event
+              accumulatedDraft = event.draft;
+              onEvent({ type: 'draft_update', draft: event.draft });
+            } else if (event.type) {
+              if (event.type === 'draft_update') {
+                accumulatedDraft = event.draft;
+              }
+              onEvent(event as DialogueEvent);
+            }
+          } catch {}
+        }
+      };
+
+      xhr.onload = () => {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          resolve();
+        } else {
+          reject(new Error(`API ${xhr.status}: ${xhr.responseText}`));
+        }
+      };
+
+      xhr.onerror = () => reject(new Error('网络错误'));
+      xhr.ontimeout = () => reject(new Error('请求超时'));
+      xhr.timeout = 300000; // 5 min timeout for SSE
+
+      xhr.send(JSON.stringify({
+        req_id: reqId,
+        message,
+        session_id: sessionId,
+      }));
+    });
+  },
+
+  confirmDialogue: (sessionId: string, finalNotes?: string) =>
+    fetchApi<{
+      ok: boolean;
+      req_id: string;
+      session_id: string;
+      cycle: number;
+      status: string;
+      already_confirmed?: boolean;
+    }>('/api/dialogue/confirm', {
+      method: 'POST',
+      body: JSON.stringify({ session_id: sessionId, final_notes: finalNotes }),
+    }),
+
+  getDialogueHistory: (sessionId: string) =>
+    fetchApi<{
+      session_id: string;
+      req_id: string;
+      cycles: DialogueCycle[];
+    }>(`/api/dialogue/history/${sessionId}`),
+
+  getDialogueCurrent: (reqId: string) =>
+    fetchApi<{
+      req_id: string;
+      session_id: string | null;
+      status: string;
+      cycle: number;
+      iterations?: number;
+      total_messages?: number;
+      confidence_score?: number | null;
+    }>(`/api/dialogue/current/${reqId}`),
+
   // Agents
   getAgents: (params?: { agent_type?: string; limit?: number }) => {
     const qs = new URLSearchParams();
