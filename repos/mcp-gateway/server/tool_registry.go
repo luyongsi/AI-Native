@@ -35,7 +35,7 @@ func (tr *ToolRegistry) GetTool(name string) (ToolDef, bool) {
 	return t, ok
 }
 
-// registerAll populates the 31 skills from doc 04 Section 7.
+// registerAll populates the 34 skills (31 original + 3 knowledge-base tools).
 func (tr *ToolRegistry) registerAll() {
 	tools := []ToolDef{
 		// 1. code_review
@@ -502,6 +502,47 @@ func (tr *ToolRegistry) registerAll() {
 					"framework":    {Type: "string", Description: "Framework to use"},
 				},
 				Required: []string{"project_type", "language"},
+			},
+		},
+
+		// 32. search_similar_requirements (A1 + A2 shared)
+		{
+			Name:        "search_similar_requirements",
+			Description: "Semantic search for similar historical requirements, ranked by similarity",
+			InputSchema: InputSchema{
+				Type: "object",
+				Properties: map[string]PropDef{
+					"query": {Type: "string", Description: "Search query text (title + description)"},
+					"limit": {Type: "integer", Description: "Max results, default 5"},
+				},
+				Required: []string{"query"},
+			},
+		},
+
+		// 33. search_known_issues (A2 only)
+		{
+			Name:        "search_known_issues",
+			Description: "Retrieve known issues / bugs / tech debt, ranked by similarity",
+			InputSchema: InputSchema{
+				Type: "object",
+				Properties: map[string]PropDef{
+					"query": {Type: "string", Description: "Search query text"},
+					"limit": {Type: "integer", Description: "Max results, default 10"},
+				},
+				Required: []string{"query"},
+			},
+		},
+
+		// 34. get_domain_risks (A1 + A2 shared)
+		{
+			Name:        "get_domain_risks",
+			Description: "Get historical risk information for a business domain",
+			InputSchema: InputSchema{
+				Type: "object",
+				Properties: map[string]PropDef{
+					"domain": {Type: "string", Description: "Business domain: auth / order / payment / inventory"},
+				},
+				Required: []string{"domain"},
 			},
 		},
 	}

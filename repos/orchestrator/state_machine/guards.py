@@ -14,7 +14,7 @@ from .states import RequirementState as RS
 GATE_MAP: dict[str, RS] = {
     "analyze":         RS.KNOWLEDGE_ANALYSIS,   # Gate 0 after A2
     "knowledge":       RS.KNOWLEDGE_ANALYSIS,   # alias
-    "design":          RS.DESIGNING,            # Gate 1
+    "design":          RS.REVIEWING,            # Gate 1 after A5 design check
     "review":          RS.REVIEWING,
     "decompose":       RS.DECOMPOSING,          # Gate 2
     "develop":         RS.DEVELOPING,
@@ -26,7 +26,7 @@ GATE_MAP: dict[str, RS] = {
 # States that require gate approval before transitioning to the next stage.
 _GATED_STATES: set[RS] = {
     RS.KNOWLEDGE_ANALYSIS,   # Gate 0 — after A2, before DESIGNING
-    RS.DESIGNING,            # Gate 1
+    RS.REVIEWING,            # Gate 1 — after A5 design check
     RS.DECOMPOSING,          # Gate 2
     RS.REVIEWING_CODE,       # Gate 3
 }
@@ -56,8 +56,8 @@ MAX_ROUNDS: dict[str, int] = {
 # Loop-context map: which loop types apply to which states.
 LOOP_CONTEXT: dict[RS, str] = {
     RS.KNOWLEDGE_ANALYSIS: "inner",  # A2 self-loop (retry once on timeout)
-    RS.DESIGNING:       "debate",    # debate rounds: DESIGNING <-> REVIEWING
-    RS.REVIEWING:       "debate",
+    RS.SPEC_WRITING:     "debate",   # Gate1 rework: SPEC_WRITING <-> REVIEWING
+    RS.REVIEWING:        "debate",
     RS.DEVELOPING:      "inner",     # inner dev loop: DEVELOPING <-> TESTING
     RS.TESTING:         "inner",
     RS.REVIEWING_CODE:  "outer",     # outer loop: back to DEVELOPING

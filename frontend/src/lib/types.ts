@@ -119,6 +119,79 @@ export interface ApprovalItem {
   reviewSummary?: string;
 }
 
+// Gate0 approval — aligned with new approvals table (migration 008)
+export interface Gate0Approval {
+  id: string;
+  req_id: string;
+  req_title?: string;
+  session_id: string | null;
+  gate_level: number;
+  cycle: number;
+  status: 'pending' | 'decided';
+  decision?: 'pass' | 'reject';
+  reject_reasons?: RejectReason[];
+  revision_guidance?: string;
+  reviewer_user_id?: string;
+  reviewer_name?: string;
+  reviewed_at?: string;
+  created_at?: string;
+  gate_meta?: { label: string; icon: string; description: string };
+}
+
+export interface RejectReason {
+  category: string;
+  description: string;
+}
+
+export interface ApprovalContext {
+  req_id: string;
+  session_id: string | null;
+  cycle: number;
+  gate_level: number;
+  a1_output: {
+    requirement_draft: RequirementDraft | null;
+    wireframe_url: string | null;
+    confidence_score: number | null;
+  };
+  a2_output: {
+    feasibility_assessment: FeasibilityAssessment | null;
+    confirmation_checklist: ConfirmationChecklistItem[];
+    conflicts: ConflictItem[];
+    quality_score: number | null;
+    a2_missing: boolean;
+  };
+  gate_meta?: { label: string; icon: string; description: string };
+}
+
+export interface FeasibilityAssessment {
+  technical: { feasible: boolean; assessment: string; concerns: string[] };
+  business: { feasible: boolean; assessment: string; concerns: string[] };
+  risk_level: 'low' | 'medium' | 'high';
+  risk_rationale: string;
+}
+
+export interface ConfirmationChecklistItem {
+  id: string;
+  category: 'requirement_clarity' | 'technical_risk' | 'dependency';
+  item: string;
+  priority: 'high' | 'medium' | 'low';
+  related_req_field?: string;
+}
+
+export interface ConflictItem {
+  id: string;
+  related_system: string;
+  type: 'field_naming' | 'business_flow' | 'data_model' | 'service_boundary';
+  description: string;
+  severity: 'high' | 'medium' | 'low';
+}
+
+export interface DecideRequest {
+  decision: 'pass' | 'reject';
+  reject_reasons?: RejectReason[];
+  revision_guidance?: string;
+}
+
 // --- Notification ---
 export interface Notification {
   id: string;
@@ -340,4 +413,41 @@ export interface DialogueCycle {
   confirmed_at?: string;
   messages: DialogueMessage[];
   draft_snapshot?: RequirementDraft | null;
+}
+
+// ── LLM Call Monitoring ─────────────────────────────────────────────
+
+export interface LLMCallItem {
+  call_id: string;
+  agent_id: string;
+  req_id: string;
+  workflow_id: string;
+  task_type: string;
+  provider: string;
+  model: string;
+  prompt_chars: number;
+  status: string;
+  started_at: string;
+  ended_at: string;
+  duration_ms: number;
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+  response_chars: number;
+  response_preview: string;
+  error_type: string | null;
+  error_message: string | null;
+}
+
+export interface LLMCallDetail extends LLMCallItem {
+  prompt: string | null;
+  response: string | null;
+  tokens_detail?: { prompt: number; completion: number; total: number };
+}
+
+export interface LLMCallListResponse {
+  items: LLMCallItem[];
+  total: number;
+  limit: number;
+  offset: number;
 }

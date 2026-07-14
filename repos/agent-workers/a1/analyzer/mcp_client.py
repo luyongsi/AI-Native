@@ -1,7 +1,7 @@
 """
 A1 Agent — MCP Knowledge Base Client
 
-Encapsulates 4 MCP tool calls:
+Encapsulates 5 MCP tool calls (4 original + 1 added for A2):
   - search_similar_requirements
   - get_domain_risks
   - get_tech_stack_recommendations
@@ -16,7 +16,7 @@ import os
 
 logger = logging.getLogger(__name__)
 
-MCP_GATEWAY_URL = os.environ.get("MCP_GATEWAY_URL", "http://localhost:8100/mcp")
+MCP_GATEWAY_URL = os.environ.get("MCP_GATEWAY_URL", "http://localhost:8081/tools/call")
 
 
 class MCPCallError(Exception):
@@ -40,7 +40,7 @@ class MCPClient:
         query = _build_search_text(draft)
         result = await self._call_tool(
             "search_similar_requirements",
-            {"query": query, "top_k": 5},
+            {"query": query, "limit": 5},
             timeout,
         )
         if isinstance(result, list):
@@ -100,6 +100,24 @@ class MCPClient:
             return result
         return None
 
+    async def search_known_issues(
+        self, draft: dict | None, timeout: float = 5.0,
+    ) -> list[dict]:
+        """Search for known issues/bugs/technical debt related to the draft.
+
+        Returns:
+            [{"id": "uuid", "title": "issue title", "similarity": 0.88, ...}, ...]
+        """
+        query = _build_search_text(draft)
+        result = await self._call_tool(
+            "search_known_issues",
+            {"query": query, "limit": 10},
+            timeout,
+        )
+        if isinstance(result, list):
+            return result
+        return []
+
     # ------------------------------------------------------------------
     async def _call_tool(
         self, tool_name: str, args: dict, timeout: float,
@@ -112,6 +130,12 @@ class MCPClient:
         try:
             import httpx
 
+            headers = {}
+            # JWT auth required for /tools/* endpoints on the Gateway
+            jwt_token = await self._ensure_token()
+            if jwt_token:
+                headers["Authorization"] = f"Bearer {jwt_token}"
+
             async with httpx.AsyncClient(
                 timeout=httpx.Timeout(timeout, connect=1.5),
             ) as client:
@@ -123,6 +147,7 @@ class MCPClient:
                         "params": {"name": tool_name, "arguments": args},
                         "id": 1,
                     },
+                    headers=headers,
                 )
                 if resp.status_code != 200:
                     logger.warning(
@@ -134,12 +159,10 @@ class MCPClient:
                 if "error" in body:
                     raise MCPCallError(str(body["error"]))
 
-                # MCP response: result.content[0].text is a JSON string
-                content = body.get("result", {}).get("content", [])
-                if content and isinstance(content[0], dict):
-                    text = content[0].get("text", "{}")
-                    import json as _json
-                    return _json.loads(text)
+                # Go server returns {result: <raw data>} — no content[0].text wrapper
+                data = body.get("result")
+                if data is not None:
+                    return data
 
                 return None
 
@@ -148,6 +171,35 @@ class MCPClient:
         except Exception as exc:
             logger.warning("MCP tool %s error: %s", tool_name, exc)
             raise MCPCallError(str(exc))
+
+    # ------------------------------------------------------------------
+    # internal helpers
+    # ------------------------------------------------------------------
+
+    _token: str | None = None
+
+    async def _ensure_token(self) -> str | None:
+        """Obtain a JWT from the Gateway's /auth/token endpoint (cached)."""
+        if self._token:
+            return self._token
+        try:
+            import httpx
+            # Derive auth URL from the tools URL: /tools/call → /auth/token
+            auth_url = self.base_url.rsplit("/tools/", 1)[0] + "/auth/token"
+            async with httpx.AsyncClient(timeout=httpx.Timeout(3, connect=1.5)) as client:
+                resp = await client.post(
+                    auth_url,
+                    json={"agent_id": "a1", "req_id": "mcp-client-init"},
+                )
+                if resp.status_code == 200:
+                    data = resp.json()
+                    self._token = data.get("token") or data.get("access_token")
+                    if self._token:
+                        logger.debug("MCP JWT token obtained")
+                    return self._token
+        except Exception:
+            logger.debug("MCP JWT token request failed — will call without auth")
+        return None
 
 
 # ------------------------------------------------------------------

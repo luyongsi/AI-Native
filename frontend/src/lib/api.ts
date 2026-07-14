@@ -8,6 +8,9 @@ import type {
   AgentInfo,
   CodeDiff,
   ApprovalItem,
+  Gate0Approval,
+  ApprovalContext,
+  DecideRequest,
   Alert,
   Notification,
   TopologyNode,
@@ -20,6 +23,9 @@ import type {
   ChatResponse,
   SpecSection,
   TestCase,
+  LLMCallItem,
+  LLMCallDetail,
+  LLMCallListResponse,
 } from './types';
 
 const BASE_URL = process.env.NEXT_PUBLIC_API_URL || '';
@@ -210,30 +216,56 @@ export const api = {
     fetchApi<{ nodes: TopologyNode[]; edges: TopologyEdge[] }>('/api/topology'),
 
   // Approvals
-  getApprovals: (params?: { gate?: number; status?: string; limit?: number }) => {
+  getApprovals: (params?: { gate_level?: number; status?: string; limit?: number }) => {
     const qs = new URLSearchParams();
-    if (params?.gate !== undefined) qs.set('gate', String(params.gate));
+    if (params?.gate_level !== undefined) qs.set('gate_level', String(params.gate_level));
     if (params?.status) qs.set('status', params.status);
     if (params?.limit) qs.set('limit', String(params.limit));
     const query = qs.toString();
-    return fetchApi<ApiListResponse<ApprovalItem>>(
+    return fetchApi<ApiListResponse<Gate0Approval>>(
       `/api/approvals${query ? `?${query}` : ''}`
     );
   },
 
-  approve: (id: string) =>
-    fetchApi<any>(`/api/approvals/${id}/approve`, { method: 'POST' }),
+  getApproval: (id: string) =>
+    fetchApi<Gate0Approval>(`/api/approvals/${id}`),
 
-  submitApproval: (reqId: string, gate?: number) =>
-    fetchApi<any>(`/api/approvals?req_id=${reqId}&gate=${gate || 1}`, { method: 'POST' }),
+  getApprovalContext: (id: string) =>
+    fetchApi<ApprovalContext>(`/api/approvals/${id}/context`),
 
-  reject: (id: string, reason?: string) =>
-    fetchApi<any>(`/api/approvals/${id}/reject${reason ? `?reason=${encodeURIComponent(reason)}` : ''}`, {
+  decideApproval: (id: string, data: DecideRequest) =>
+    fetchApi<Gate0Approval>(`/api/approvals/${id}/decide`, {
       method: 'POST',
+      body: JSON.stringify(data),
+    }),
+
+  // Deprecated — use decideApproval(id, {decision: 'pass'}) instead
+  approve: (id: string) =>
+    fetchApi<any>(`/api/approvals/${id}/decide`, {
+      method: 'POST',
+      body: JSON.stringify({ decision: 'pass' }),
+    }),
+
+  // Deprecated — MC Backend /api/approvals POST is for internal NATS subscriber use
+  submitApproval: (reqId: string, gate?: number) =>
+    fetchApi<any>('/api/approvals', {
+      method: 'POST',
+      body: JSON.stringify({ req_id: reqId, gate_level: gate || 0, cycle: 0, session_id: '' }),
+    }),
+
+  // Deprecated — use decideApproval(id, {decision: 'reject', ...}) instead
+  reject: (id: string, reason?: string) =>
+    fetchApi<any>(`/api/approvals/${id}/decide`, {
+      method: 'POST',
+      body: JSON.stringify({
+        decision: 'reject',
+        reject_reasons: [{ category: 'other', description: reason || 'Rejected' }],
+        revision_guidance: reason || 'Please revise',
+      }),
     }),
 
   checkOverdueApprovals: () =>
-    fetchApi<any>('/api/approvals/check-overdue'),
+    fetchApi<any>('/api/approvals'),
 
   // Insights
   getInsights: () => fetchApi<InsightsData>('/api/insights'),
@@ -357,4 +389,29 @@ export const api = {
     fetchApi<void>(`/api/tests/${reqId}/cases/${caseId}`, {
       method: 'DELETE',
     }),
+
+  // LLM Calls
+  getLLMCalls: (params?: {
+    agent_id?: string;
+    req_id?: string;
+    task_type?: string;
+    status?: string;
+    limit?: number;
+    offset?: number;
+  }) => {
+    const qs = new URLSearchParams();
+    if (params?.agent_id) qs.set('agent_id', params.agent_id);
+    if (params?.req_id) qs.set('req_id', params.req_id);
+    if (params?.task_type) qs.set('task_type', params.task_type);
+    if (params?.status) qs.set('status', params.status);
+    if (params?.limit) qs.set('limit', String(params.limit));
+    if (params?.offset) qs.set('offset', String(params.offset));
+    const query = qs.toString();
+    return fetchApi<LLMCallListResponse>(
+      `/api/llm-calls${query ? `?${query}` : ''}`
+    );
+  },
+
+  getLLMCall: (callId: string) =>
+    fetchApi<LLMCallDetail>(`/api/llm-calls/${callId}`),
 };

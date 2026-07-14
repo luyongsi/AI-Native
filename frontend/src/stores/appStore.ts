@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 
-type PageView = 'dashboard' | 'requirements' | 'agents' | 'approvals' | 'releases' | 'insights' | 'alerts' | 'workspace' | 'knowledge' | string;
+type PageView = 'dashboard' | 'requirements' | 'agents' | 'approvals' | 'releases' | 'insights' | 'alerts' | 'llm-calls' | 'workspace' | 'knowledge' | string;
 
 interface AppStore {
   sidebarCollapsed: boolean;

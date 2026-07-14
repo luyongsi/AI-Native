@@ -8,8 +8,9 @@ TRANSITION_TABLE: dict[RS, list[RS]] = {
     RS.DRAFT:               [RS.ANALYZING, RS.BLOCKED],
     RS.ANALYZING:           [RS.KNOWLEDGE_ANALYSIS, RS.BLOCKED],   # A1 -> A2
     RS.KNOWLEDGE_ANALYSIS:  [RS.DESIGNING, RS.ANALYZING, RS.BLOCKED],  # Gate 0: pass->DESIGNING, reject->ANALYZING
-    RS.DESIGNING:           [RS.REVIEWING, RS.BLOCKED],            # Gate 1 between
-    RS.REVIEWING:           [RS.DECOMPOSING, RS.DESIGNING, RS.BLOCKED],  # DESIGNING for rework
+    RS.DESIGNING:           [RS.SPEC_WRITING, RS.BLOCKED],         # A3 confirm -> A4 spec writing
+    RS.SPEC_WRITING:        [RS.REVIEWING, RS.BLOCKED],            # A4 done -> A5 review
+    RS.REVIEWING:           [RS.DECOMPOSING, RS.SPEC_WRITING, RS.BLOCKED],  # Gate 1: pass->DECOMPOSING, reject->SPEC_WRITING
     RS.DECOMPOSING:         [RS.DEVELOPING, RS.BLOCKED],           # Gate 2 between
     RS.DEVELOPING:          [RS.TESTING, RS.BLOCKED],
     RS.TESTING:             [RS.REVIEWING_CODE, RS.DEVELOPING, RS.BLOCKED],  # DEVELOPING for inner loop

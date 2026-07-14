@@ -1,28 +1,49 @@
 """
-A5: Design Review Panel (设计评审面板)
+A5: Design Review Agent (自动设计检查)
 
-触发条件:
-  - review.start (NATS Event from approvals chain)
-  - context.ready.design_review (NATS Event from Orchestrator)
+Stage 2: Non-blocking automated design review.
+Performs 5 independent dimensional checks on A3 prototype + A4 spec.
 
-真实 LLM: 调用 DeepSeek API 对 Spec 做三方面评审:
-  1. UX Heuristic Evaluator — 用户体验启发式评审
-  2. API N+1 Detector — API 额外请求检测
-  3. Business Completeness Checker — 业务完整性检查
+Trigger: context.ready.A5 (NATS from Orchestrator after A4 completes or is skipped)
 
-汇总后发布 review.completed 事件 (含 pass/fail + scores + issues)
+Five dimensions (sequential, 3min timeout each):
+  1. api_consistency — OpenAPI vs Spec endpoint alignment
+  2. erd_completeness — ERD entity/field coverage
+  3. state_machine_closure — state reachability and exit
+  4. prototype_spec_alignment — prototype screens vs use cases
+  5. security_baseline — auth schemes, PII labeling, HTTPS
+
+Non-blocking: always produces a report, never returns pass/fail.
+A4-missing mode: only prototype_spec_alignment runs, rest skipped.
+Dimension-level degradation: single dim timeout → skip that dim.
 """
 
-import logging
+from __future__ import annotations
+
 import asyncio
 import json
+import logging
 import os
 from datetime import datetime, timezone
 
-from base_worker import BaseAgentWorker
 import asyncpg
+from base_worker import BaseAgentWorker
 
 logger = logging.getLogger(__name__)
+
+# Dimension definitions with weights
+DIMENSIONS = [
+    {"key": "api_consistency",        "label": "API 一致性",
+     "weight": 0.25, "timeout_s": 180},
+    {"key": "erd_completeness",       "label": "ERD 完整性",
+     "weight": 0.25, "timeout_s": 180},
+    {"key": "state_machine_closure",  "label": "状态机闭合性",
+     "weight": 0.20, "timeout_s": 180},
+    {"key": "prototype_spec_alignment", "label": "原型-Spec 对齐",
+     "weight": 0.15, "timeout_s": 180},
+    {"key": "security_baseline",      "label": "安全基线",
+     "weight": 0.15, "timeout_s": 180},
+]
 
 
 class DesignReviewAgent(BaseAgentWorker):
@@ -35,235 +56,523 @@ class DesignReviewAgent(BaseAgentWorker):
 
     async def _get_db(self):
         if self._db_pool is None:
-            DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql://ai_native:ai_native_dev@localhost:5432/ai_native")
-            self._db_pool = await asyncpg.create_pool(DATABASE_URL, min_size=1, max_size=3)
+            DATABASE_URL = os.environ.get(
+                "DATABASE_URL",
+                "postgresql://ai_native:ai_native_dev@localhost:5432/ai_native",
+            )
+            self._db_pool = await asyncpg.create_pool(
+                DATABASE_URL, min_size=1, max_size=3,
+            )
         return await self._db_pool.acquire()
 
-    async def _read_spec_from_db(self, req_id: str) -> dict:
-        conn = await self._get_db()
-        try:
-            row = await conn.fetchrow(
-                "SELECT id, title, spec FROM requirements WHERE id = $1::uuid", req_id
-            )
-            if not row:
-                return {}
-            spec_raw = row["spec"]
-            if isinstance(spec_raw, str):
-                try:
-                    spec_raw = json.loads(spec_raw)
-                except (json.JSONDecodeError, TypeError):
-                    spec_raw = {}
-            if not isinstance(spec_raw, dict):
-                spec_raw = {}
-            return {"title": row["title"], "spec": spec_raw}
-        finally:
-            await conn.close()
-
     async def execute(self, req_id: str, context_package: dict) -> dict:
-        """核心逻辑: 读取 Spec → 调用 LLM 做三方面评审 → 汇总 → 发布 review.completed"""
+        """Five-dimension design review — non-blocking, always produces a report."""
         logger.info(f"[A5] Starting design review for req={req_id}")
 
-        # Read spec from DB for full context
-        db_data = await self._read_spec_from_db(req_id)
-        spec = db_data.get("spec", {})
-        title = db_data.get("title", "未命名需求")
+        a3_output = context_package.get("a3_output", {})
+        a4_output = context_package.get("a4_output", {})
+        cycle = context_package.get("cycle", 0)
+        a4_missing = a4_output.get("a4_missing", False)
 
-        # Build spec summary for LLM — adapt to A4's actual output structure:
-        # A4 writes: {openapi: {openapi, schema: {info, paths, components}}, erd: {erd_mermaid, ddl, entities, relationships}}
-        # A5 needs: section_text, openapi_text, erd_text
-        sections = spec.get("sections", spec.get("spec_sections", []))
-        openapi_spec = spec.get("openapi", {})
-        erd_spec = spec.get("erd", {})
+        logger.info(f"[A5] a4_missing={a4_missing}")
 
-        # Build section_text from sections first, then fallback to openapi schema info
-        if sections:
-            section_text = "\n\n".join(
-                f"## {s.get('title','')}\n{s.get('content','')[:500]}"
-                for s in sections[:10]
-            )
-        else:
-            # A4 writes openapi.schema with the actual spec
-            api_schema = openapi_spec.get("schema", openapi_spec)
-            section_text = json.dumps({
-                "info": api_schema.get("info", {}),
-                "endpoints": list(api_schema.get("paths", {}).keys()),
-            }, ensure_ascii=False)[:2000]
+        if a4_missing:
+            return await self._check_prototype_only(req_id, cycle, a3_output)
 
-        # Extract openapi_text from A4's structure
-        api_schema = openapi_spec.get("schema", {})
-        if api_schema and api_schema.get("paths"):
-            openapi_text = json.dumps({
-                "paths": {p: list(methods.keys()) for p, methods in api_schema.get("paths", {}).items()},
-                "schemas": list(api_schema.get("components", {}).get("schemas", {}).keys()),
-            }, ensure_ascii=False)[:2000]
-        elif openapi_spec.get("paths"):
-            openapi_text = json.dumps(openapi_spec, ensure_ascii=False)[:2000]
-        else:
-            openapi_text = json.dumps(openapi_spec, ensure_ascii=False)[:2000]
+        # Run all 5 dimensions sequentially (no external deps, fast enough)
+        dimensions = []
+        total_weight = 0.0
+        weighted_sum = 0.0
 
-        # Extract actual API paths from A4's nested structure
-        if api_schema and api_schema is not openapi_spec:
-            paths = api_schema.get("paths", {})
-        else:
-            paths = openapi_spec.get("paths", {})
-        openapi_text = json.dumps(paths, ensure_ascii=False, indent=2)[:2000]
+        for dim in DIMENSIONS:
+            try:
+                result = await asyncio.wait_for(
+                    self._run_dimension(dim["key"], a3_output, a4_output,
+                                        context_package),
+                    timeout=dim["timeout_s"],
+                )
+                if result.get("score") is not None:
+                    weighted_sum += result["score"] * dim["weight"]
+                    total_weight += dim["weight"]
+                dimensions.append(result)
+            except asyncio.TimeoutError:
+                logger.warning(f"[A5] Dimension {dim['key']} timed out, skipping")
+                dimensions.append({
+                    "dimension": dim["key"],
+                    "label": dim["label"],
+                    "score": None,
+                    "status": "skipped",
+                    "skip_reason": "llm_timeout",
+                    "issues": [],
+                })
 
-        # Extract tables/entities from A4's ERD structure
-        erd_tables = erd_spec.get("entities", erd_spec.get("tables", []))
-        erd_text = json.dumps({
-            "entities": erd_tables,
-            "relationships": erd_spec.get("relationships", []),
-        }, ensure_ascii=False, indent=2)[:1500]
+        overall_score = round(weighted_sum / total_weight, 2) if total_weight > 0 else 0.0
+        total_issues = sum(len(d.get("issues", [])) for d in dimensions)
 
-        await self.report_status(req_id, "running", "Phase 1: LLM 设计评审")
+        # Build report
+        check_report = {
+            "overall_score": overall_score,
+            "total_issues": total_issues,
+            "dimensions": dimensions,
+            "summary": self._generate_summary(dimensions, overall_score),
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+        }
 
-        # Use compressed context instead of per-field brute truncation
-        context_text = await self.prepare_llm_context(context_package, state="reviewing")
+        # Persist to agent_results
+        await self._persist_result(req_id, cycle, check_report)
 
-        review_prompt = f"""你是一个资深技术评审专家。请对以下需求的设计规格进行三维度评审。
+        # Report artifact
+        await self.report_artifact(req_id, "design_review", {
+            "check_report": check_report,
+            "non_blocking": True,
+        })
 
-需求标题: {title}
+        logger.info(
+            f"[A5] Review complete: overall={overall_score}, "
+            f"issues={total_issues}, skipped={sum(1 for d in dimensions if d.get('status') == 'skipped')}"
+        )
 
-{context_text}
+        return {
+            "status": "completed",
+            "check_report": check_report,
+            "non_blocking": True,
+        }
 
-请输出严格 JSON（不要 markdown 包裹）：
+    # ── Dimension runners ───────────────────────────────────────────────
+
+    async def _run_dimension(
+        self, key: str, a3: dict, a4: dict, context_package: dict,
+    ) -> dict:
+        """Run a single dimension check via LLM."""
+        runner_map = {
+            "api_consistency": self._check_api_consistency,
+            "erd_completeness": self._check_erd_completeness,
+            "state_machine_closure": self._check_state_machine_closure,
+            "prototype_spec_alignment": self._check_prototype_alignment,
+            "security_baseline": self._check_security_baseline,
+        }
+        runner = runner_map.get(key)
+        if runner is None:
+            return {
+                "dimension": key, "label": key, "score": None,
+                "status": "skipped", "skip_reason": "unknown_dimension",
+                "issues": [],
+            }
+        return await runner(a3, a4, context_package)
+
+    async def _check_api_consistency(
+        self, a3: dict, a4: dict, ctx: dict,
+    ) -> dict:
+        """Check OpenAPI alignment with Spec API endpoints."""
+        spec_doc = a4.get("spec_doc", {})
+        openapi_schema = a4.get("openapi_schema", {})
+
+        spec_endpoints = json.dumps(
+            spec_doc.get("api_endpoints", []), ensure_ascii=False,
+        )[:2000]
+        openapi_paths = json.dumps(
+            list(openapi_schema.get("paths", {}).keys()),
+            ensure_ascii=False,
+        )[:1000]
+
+        prompt = f"""你是 API 设计审查专家。检查 OpenAPI 规范是否与 Spec 中的接口定义一致。
+
+Spec 中定义的 API 端点:
+{spec_endpoints}
+
+OpenAPI paths:
+{openapi_paths}
+
+请输出严格 JSON:
 {{
-  "ux_review": {{
-    "score": 0-100,
-    "passed": true/false (score >= 70 → true),
-    "findings": [
-      {{"severity": "critical|major|minor|cosmetic", "heuristic": "启发式规则名", "description": "发现的问题", "suggestion": "改进建议"}}
-    ]
-  }},
-  "api_review": {{
-    "score": 0-100,
-    "passed": true/false,
-    "findings": [
-      {{"severity": "high|medium|low", "endpoint": "接口路径", "risk": "N+1|性能|安全", "description": "问题描述", "suggestion": "改进建议"}}
-    ]
-  }},
-  "business_review": {{
-    "score": 0-100,
-    "passed": true/false,
-    "findings": [
-      {{"severity": "high|medium|low", "category": "auth|validation|error_handling|edge_case|audit", "description": "缺失场景", "suggestion": "补充建议"}}
-    ]
-  }},
-  "overall_pass": true/false (三者都 passed → true),
-  "summary": "评审总结（100字以内）"
+  "score": 0-100,
+  "issues": [
+    {{"severity": "critical|major|minor|info", "description": "问题描述",
+      "suggestion": "改进建议", "location": "openapi_schema.paths./xxx"}}
+  ]
 }}
 
-评审要点:
-- UX: 检查交互状态是否完整 (loading/empty/error/edge)、是否遵循一致性原则、是否提供清晰的反馈
-- API: 检查是否有 N+1 查询风险、接口粒度是否合理、错误响应是否规范
-- 业务: 检查鉴权授权、输入校验、异常处理、边界条件、审计日志等是否完整
-- 如果 Spec 不够详细导致某些维度无法评审，应给出较低分数并说明需要补充的信息"""
+检查要点:
+- Spec 中定义的 API 在 OpenAPI paths 中是否都有对应（Endpoint 覆盖）
+- 每个 endpoint 是否定义了成功和错误响应 schema（响应定义）
+- 是否使用了统一的错误码格式（错误码规范）
+- 是否有 N+1 查询风险（批量接口 vs 单条循环调用）
+- POST/PUT 操作是否有 requestBody 定义"""
+        return await self._llm_check("api_consistency", "API 一致性", prompt, ctx)
 
-        content = await self.call_llm([{"role": "user", "content": review_prompt}],
+    async def _check_erd_completeness(
+        self, a3: dict, a4: dict, ctx: dict,
+    ) -> dict:
+        """Check ERD coverage of Spec data models."""
+        spec_doc = a4.get("spec_doc", {})
+        erd = a4.get("erd_diagram", {})
+
+        data_models = json.dumps(
+            spec_doc.get("data_models", []), ensure_ascii=False,
+        )[:2000]
+        entities = json.dumps(
+            erd.get("entities", []), ensure_ascii=False,
+        )[:1500]
+        relationships = json.dumps(
+            erd.get("relationships", []), ensure_ascii=False,
+        )[:1000]
+
+        prompt = f"""你是数据库设计审查专家。检查 ERD 是否覆盖 Spec 数据模型中的所有业务实体。
+
+Spec 数据模型:
+{data_models}
+
+ERD 实体:
+{entities}
+
+ERD 关系:
+{relationships}
+
+请输出严格 JSON:
+{{
+  "score": 0-100,
+  "issues": [
+    {{"severity": "critical|major|minor|info", "description": "问题描述",
+      "suggestion": "改进建议", "location": "erd.entities"}}
+  ]
+}}
+
+检查要点:
+- Spec data_models 中的实体在 ERD entities 中是否都有对应
+- 每个实体的所有字段是否都有类型/约束定义
+- 每个实体是否定义了主键
+- 实体间的引用关系是否在 relations 中声明"""
+        return await self._llm_check("erd_completeness", "ERD 完整性", prompt, ctx)
+
+    async def _check_state_machine_closure(
+        self, a3: dict, a4: dict, ctx: dict,
+    ) -> dict:
+        """Check state machine closure — all states reachable and exit-able."""
+        spec_doc = a4.get("spec_doc", {})
+
+        state_machines = []
+        for mod in spec_doc.get("modules", []):
+            sm = mod.get("state_machine", {})
+            if sm:
+                state_machines.append({
+                    "module": mod.get("name", "unknown"),
+                    "states": sm.get("states", []),
+                    "transitions": sm.get("transitions", []),
+                })
+
+        if not state_machines:
+            return {
+                "dimension": "state_machine_closure",
+                "label": "状态机闭合性",
+                "score": None,
+                "status": "skipped",
+                "skip_reason": "no_state_machines",
+                "issues": [],
+            }
+
+        sm_text = json.dumps(state_machines, ensure_ascii=False)[:2500]
+
+        prompt = f"""你是状态机设计审查专家。检查 Spec 中的状态机设计是否完整。
+
+状态机定义:
+{sm_text}
+
+请输出严格 JSON:
+{{
+  "score": 0-100,
+  "issues": [
+    {{"severity": "critical|major|minor|info", "description": "问题描述",
+      "suggestion": "改进建议", "location": "spec.modules[].state_machine"}}
+  ]
+}}
+
+检查要点:
+- 每个状态是否至少有一条入边（初始状态除外，状态可达性）
+- 每个非终态是否至少有一条出边（状态可出性）
+- 终态是否正确标记
+- 每条 transition 是否定义了 trigger（触发事件）
+- 是否存在孤立状态（无入边无出边）"""
+        return await self._llm_check(
+            "state_machine_closure", "状态机闭合性", prompt, ctx,
+        )
+
+    async def _check_prototype_alignment(
+        self, a3: dict, a4: dict, ctx: dict,
+    ) -> dict:
+        """Check prototype screen coverage vs Spec use cases and states."""
+        spec_doc = a4.get("spec_doc", {})
+        screens = a3.get("screens", [])
+
+        use_cases = json.dumps(
+            spec_doc.get("api_endpoints", []), ensure_ascii=False,
+        )[:1500]
+        modules = json.dumps([
+            {"name": m.get("name"), "states": m.get("states", [])}
+            for m in spec_doc.get("modules", [])
+        ], ensure_ascii=False)[:1500]
+        screens_text = json.dumps([
+            {"name": s.get("name"), "state": s.get("state")}
+            for s in screens
+        ], ensure_ascii=False)[:1000]
+
+        prompt = f"""你是 UI/UX 审查专家。检查原型页面是否覆盖 Spec 中定义的交互路径和状态。
+
+Spec 模块和状态:
+{modules}
+
+Spec 用例 (API):
+{use_cases}
+
+原型截图:
+{screens_text}
+
+请输出严格 JSON:
+{{
+  "score": 0-100,
+  "issues": [
+    {{"severity": "critical|major|minor|info", "description": "问题描述",
+      "suggestion": "改进建议", "location": "prototype.screens"}}
+  ]
+}}
+
+检查要点:
+- Spec 中定义的每个状态（default/loading/empty/error/hover/active）是否在原型截图中有体现
+- 是否存在断头路（原型中的页面找不到对应的 Spec 入口）
+- 用户体验启发式检查：一致性、反馈清晰度、错误预防"""
+        return await self._llm_check(
+            "prototype_spec_alignment", "原型-Spec 对齐", prompt, ctx,
+        )
+
+    async def _check_security_baseline(
+        self, a3: dict, a4: dict, ctx: dict,
+    ) -> dict:
+        """Check API security baseline."""
+        openapi_schema = a4.get("openapi_schema", {})
+        spec_doc = a4.get("spec_doc", {})
+
+        security_info = json.dumps({
+            "security": openapi_schema.get("security", []),
+            "components": {
+                "securitySchemes": openapi_schema.get("components", {}).get(
+                    "securitySchemes", {},
+                ),
+            },
+        }, ensure_ascii=False)[:1500]
+        paths = json.dumps(
+            list(openapi_schema.get("paths", {}).keys()), ensure_ascii=False,
+        )[:1000]
+
+        prompt = f"""你是安全审查专家。检查 API 设计是否满足基本安全要求。
+
+OpenAPI 安全定义:
+{security_info}
+
+API 路径:
+{paths}
+
+请输出严格 JSON:
+{{
+  "score": 0-100,
+  "issues": [
+    {{"severity": "critical|major|minor|info", "description": "问题描述",
+      "suggestion": "改进建议", "location": "openapi_schema"}}
+  ]
+}}
+
+检查要点:
+- OpenAPI 中是否定义了 securitySchemes（认证定义）
+- 敏感 endpoint（增删改）是否标注了 required scopes（授权标注）
+- 敏感字段（name/email/phone/id_card）是否标注了 PII 分类
+- 是否有全局 scheme=https 声明（HTTPS 强制）"""
+        return await self._llm_check("security_baseline", "安全基线", prompt, ctx)
+
+    # ── LLM helper ──────────────────────────────────────────────────────
+
+    async def _llm_check(
+        self, key: str, label: str, prompt: str, ctx: dict,
+    ) -> dict:
+        """Call LLM for a single dimension check. Returns dimension result."""
+        content = await self.call_llm(
+            [{"role": "user", "content": prompt}],
             task_type="design_review",
-            req_id=req_id,
-            workflow_id=context_package.get("workflow_id", ""),
-            temperature=0.2,
-            max_tokens=3000,
+            req_id=ctx.get("req_id", ""),
+            workflow_id=ctx.get("workflow_id", ""),
+            temperature=0.1,
+            max_tokens=2000,
         )
 
         if content:
             try:
-                content = content.strip()
-                if content.startswith("```"):
-                    content = content.split("```")[1].split("```")[0].strip()
-                if content.startswith("json"):
-                    content = content[4:].strip()
-                review = json.loads(content)
-                logger.info("[A5] LLM review successful")
-            except json.JSONDecodeError as e:
-                logger.warning(f"[A5] LLM JSON parse failed: {e}, using fallback")
-                review = self._fallback_review(spec, title)
-        else:
-            review = self._fallback_review(spec, title)
+                text = content.strip()
+                if text.startswith("```"):
+                    text = text.split("```")[1].split("```")[0].strip()
+                if text.startswith("json"):
+                    text = text[4:].strip()
+                result = json.loads(text)
+                return {
+                    "dimension": key,
+                    "label": label,
+                    "score": result.get("score", 0) / 100.0,
+                    "issues": result.get("issues", []),
+                }
+            except (json.JSONDecodeError, KeyError, TypeError) as e:
+                logger.warning(f"[A5] LLM parse failed for {key}: {e}")
 
-        # Build summary
-        review_id = f"REV-{req_id[:8]}-{datetime.now(timezone.utc).strftime('%H%M%S')}"
-        ux_pass = review.get("ux_review", {}).get("passed", False)
-        api_pass = review.get("api_review", {}).get("passed", False)
-        biz_pass = review.get("business_review", {}).get("passed", False)
-        # 2 out of 3 passing is enough to proceed (API can be refined later)
-        overall_pass = (ux_pass + api_pass + biz_pass) >= 2
-        if not overall_pass:
-            # Override if LLM said true
-            overall_pass = review.get("overall_pass", False)
-        summary = {
-            "review_id": review_id,
-            "req_id": req_id,
-            "pass": overall_pass,
-            "scores": {
-                "ux_heuristic": {
-                    "score": review.get("ux_review", {}).get("score", 0),
-                    "passed": ux_pass,
-                },
-                "api_n1": {
-                    "score": review.get("api_review", {}).get("score", 0),
-                    "passed": api_pass,
-                },
-                "business_completeness": {
-                    "score": review.get("business_review", {}).get("score", 0),
-                    "passed": biz_pass,
-                },
-                "average": round((
-                    review.get("ux_review", {}).get("score", 0) +
-                    review.get("api_review", {}).get("score", 0) +
-                    review.get("business_review", {}).get("score", 0)
-                ) / 3, 1),
-            },
-            "issues": (
-                review.get("ux_review", {}).get("findings", []) +
-                review.get("api_review", {}).get("findings", []) +
-                review.get("business_review", {}).get("findings", [])
-            ),
-            "total_issues": len(
-                review.get("ux_review", {}).get("findings", []) +
-                review.get("api_review", {}).get("findings", []) +
-                review.get("business_review", {}).get("findings", [])
-            ),
-            "summary": review.get("summary", ""),
-            "recommendation": (
-                "通过评审，可进入任务拆解阶段" if overall_pass
-                else "需修改后重新提交评审"
-            ),
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-        }
-
-        await self.report_artifact(req_id, "design_review", summary)
-
-        # Log review details for debugging
-        logger.info(f"[A5] Review scores: {json.dumps(summary['scores'], ensure_ascii=False)}")
-        logger.info(f"[A5] Review summary: {summary.get('summary','')[:200]}")
-        for issue in summary.get("issues", [])[:5]:
-            logger.info(f"[A5] Issue: {issue.get('severity','?')} - {issue.get('description','')[:100]}")
-
-        return {"status": "completed" if summary["pass"] else "failed", **summary}
-
-    def _fallback_review(self, spec: dict, title: str) -> dict:
-        """Fallback review when LLM is unavailable."""
-        sections = spec.get("sections", spec.get("spec_sections", []))
-        openapi_spec = spec.get("openapi", {})
-        erd_spec = spec.get("erd", {})
-        api_schema = openapi_spec.get("schema", openapi_spec)
-        has_paths = bool(api_schema.get("paths"))
-        has_entities = bool(erd_spec.get("entities", erd_spec.get("tables", [])))
-        has_content = len(sections) > 0 or has_paths or has_entities
-        if has_content:
-            return {
-                "ux_review": {"score": 75, "passed": True, "findings": [{"severity": "minor", "heuristic": "一致性", "description": "Spec 内容基本完整，建议补充交互状态定义", "suggestion": "补充 loading/error/empty 状态描述"}]},
-                "api_review": {"score": 70, "passed": True, "findings": [{"severity": "low", "endpoint": "N/A", "risk": "性能", "description": "缺少明确的 API 契约定义", "suggestion": "建议生成 OpenAPI 规范"}]},
-                "business_review": {"score": 72, "passed": True, "findings": [{"severity": "medium", "category": "validation", "description": "缺少输入校验规则描述", "suggestion": "补充每个接口的校验规则"}]},
-                "overall_pass": True,
-                "summary": f"[Fallback] Spec '{title}' 基本通过评审，建议补充 API 契约和交互状态定义",
-            }
+        # Fallback: rule-based pass
         return {
-            "ux_review": {"score": 50, "passed": False, "findings": [{"severity": "major", "heuristic": "系统状态可见性", "description": "Spec 内容为空，无法评审 UX", "suggestion": "先生成 Spec 内容"}]},
-            "api_review": {"score": 45, "passed": False, "findings": [{"severity": "high", "endpoint": "N/A", "risk": "N+1", "description": "无 API 定义", "suggestion": "生成 OpenAPI 规范"}]},
-            "business_review": {"score": 40, "passed": False, "findings": [{"severity": "high", "category": "edge_case", "description": "无业务场景描述", "suggestion": "补充 BDD 验收场景"}]},
-            "overall_pass": False,
-            "summary": "[Fallback] Spec 内容不完整，需生成 Spec 后重新评审",
+            "dimension": key,
+            "label": label,
+            "score": 0.6,
+            "issues": [{
+                "severity": "info",
+                "description": f"{label}检查使用降级规则评分（LLM 不可用）",
+                "suggestion": "建议人工复核",
+            }],
         }
+
+    # ── A4-missing mode ─────────────────────────────────────────────────
+
+    async def _check_prototype_only(
+        self, req_id: str, cycle: int, a3_output: dict,
+    ) -> dict:
+        """Degraded mode: only prototype_spec_alignment when A4 is missing."""
+        logger.info(f"[A5] A4 missing — running prototype-only check for req={req_id}")
+
+        screens = a3_output.get("screens", [])
+        screens_text = json.dumps([
+            {"name": s.get("name"), "state": s.get("state")}
+            for s in screens
+        ], ensure_ascii=False)[:1500]
+
+        prompt = f"""你是 UI 审查专家。A4 Spec 尚未生成，仅基于原型截图做初步检查。
+
+原型截图:
+{screens_text}
+
+请输出严格 JSON:
+{{
+  "score": 0-100,
+  "issues": [
+    {{"severity": "critical|major|minor|info", "description": "问题描述",
+      "suggestion": "改进建议"}}
+  ]
+}}
+
+检查要点:
+- 原型中是否包含了 default/loading/empty/error 等必要状态
+- 页面交互流是否完整（无明显断头路）"""
+
+        content = await self.call_llm(
+            [{"role": "user", "content": prompt}],
+            task_type="design_review",
+            req_id=req_id,
+            workflow_id="",
+            temperature=0.1,
+            max_tokens=1500,
+        )
+
+        proto_dim = {
+            "dimension": "prototype_spec_alignment",
+            "label": "原型-Spec 对齐",
+            "score": 0.5,
+            "issues": [],
+        }
+
+        if content:
+            try:
+                text = content.strip()
+                if text.startswith("```"):
+                    text = text.split("```")[1].split("```")[0].strip()
+                if text.startswith("json"):
+                    text = text[4:].strip()
+                result = json.loads(text)
+                proto_dim["score"] = result.get("score", 50) / 100.0
+                proto_dim["issues"] = result.get("issues", [])
+            except (json.JSONDecodeError, KeyError):
+                pass
+
+        skipped_dims = [
+            {"dimension": d["key"], "label": d["label"],
+             "score": None, "status": "skipped", "skip_reason": "a4_missing",
+             "issues": []}
+            for d in DIMENSIONS if d["key"] != "prototype_spec_alignment"
+        ]
+
+        dimensions = skipped_dims + [proto_dim]
+        check_report = {
+            "overall_score": proto_dim["score"],
+            "total_issues": len(proto_dim.get("issues", [])),
+            "dimensions": dimensions,
+            "summary": "A4 Spec 未生成，仅对原型截图做了初步检查。建议在 A4 完成后重新检查。",
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+        await self._persist_result(req_id, cycle, check_report)
+        await self.report_artifact(req_id, "design_review", {
+            "check_report": check_report,
+            "non_blocking": True,
+        })
+
+        return {"status": "completed", "check_report": check_report,
+                "non_blocking": True}
+
+    # ── Persistence ─────────────────────────────────────────────────────
+
+    async def _persist_result(
+        self, req_id: str, cycle: int, check_report: dict,
+    ):
+        """Write design review result to agent_results."""
+        conn = await self._get_db()
+        try:
+            artifact = {
+                "check_report": check_report,
+                "non_blocking": True,
+                "generated_at": datetime.now(timezone.utc).isoformat(),
+            }
+            await conn.execute(
+                """INSERT INTO agent_results
+                   (req_id, agent_key, cycle, status, artifact)
+                   VALUES ($1::uuid, 'A5', $2, 'completed', $3::jsonb)
+                   ON CONFLICT (req_id, agent_key, cycle) DO UPDATE
+                   SET artifact = EXCLUDED.artifact,
+                       status = 'completed',
+                       created_at = NOW()""",
+                req_id, cycle, json.dumps(artifact),
+            )
+            logger.info(f"[A5] Result persisted for req={req_id}")
+        finally:
+            await conn.close()
+
+    # ── Summary generation ──────────────────────────────────────────────
+
+    def _generate_summary(self, dimensions: list, overall: float) -> str:
+        """Generate a human-readable summary from dimension results."""
+        skipped = [d for d in dimensions if d.get("status") == "skipped"]
+        critical = sum(
+            1 for d in dimensions
+            for i in d.get("issues", [])
+            if i.get("severity") == "critical"
+        )
+        major = sum(
+            1 for d in dimensions
+            for i in d.get("issues", [])
+            if i.get("severity") == "major"
+        )
+
+        parts = []
+        if overall >= 0.8:
+            parts.append("整体设计质量良好")
+        elif overall >= 0.6:
+            parts.append("整体设计质量一般，建议重点修复 major 级别问题")
+        else:
+            parts.append("整体设计质量偏低，建议全面复核后再提交 Gate1")
+
+        if critical > 0:
+            parts.append(f"发现 {critical} 个 critical 问题")
+        if major > 0:
+            parts.append(f"发现 {major} 个 major 问题")
+        if skipped:
+            skipped_names = [d["label"] for d in skipped]
+            parts.append(f"跳过维度: {', '.join(skipped_names)}")
+
+        return "。".join(parts) + "。"

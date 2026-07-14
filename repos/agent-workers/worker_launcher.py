@@ -1,12 +1,13 @@
 """
-worker_launcher.py — 一键启动所有 Agent Worker 的 NATS 订阅 + 桥接服务
+worker_launcher.py — 一键启动阶段一 Agent Worker 的 NATS 订阅 + 桥接服务
+
+当前阶段一只需 A1、A2 和 Gate0（人工审批），其余 Agent 在后续阶段启用。
 
 启动逻辑：
-  1. 实例化所有已注册的 Agent Worker (A1-A13, K14-K15)
+  1. 实例化 A1 + A2 Agent Worker
   2. 初始化 NATS 连接
   3. 启动 NATS-Temporal Bridge（agent.result → Workflow Signal）
-  4. 为每个 Agent 订阅 NATS（只订阅 context.ready.{agent_type}，无 extra_subjects）
-  5. 可选：注册为 Temporal Activities
+  4. 为每个 Agent 订阅 NATS（只订阅 context.ready.{agent_type}）
 
 用法：
   python3 worker_launcher.py
@@ -34,23 +35,27 @@ from temporalio.worker import Worker
 
 from base_worker import BaseAgentWorker, make_temporal_activity
 
-# 导入所有 Agent 实现 (A1-A13, K14-K15)
+# ── Phase 1 agents (A1 + A2) ─────────────────────────────────────────
 from a1_requirement_intake import A1RequirementIntake
 from a2_knowledge_analyst import A2KnowledgeAnalyst
+
+# ── Phase 2 agents (A3 + A4 + A5) — Stage 2 design pipeline ───────────
 from a3_ui_generator import UIGeneratorAgent
 from a4_spec_writer import A4SpecWriter
 from a5_design_review import DesignReviewAgent
-from a6_spec_decomposer import SpecDecomposerAgent
-from a7_test_case_generator import TestCaseGeneratorAgent
-from a8_architecture_expert import ArchitectureExpertAgent
-from a9.a9_dev_agent import A9DevAgent
-from ci_agent import CICDAgent
-from a11_test_agent_stub import A11TestAgentStub
-from a12_code_review import CodeReviewAgent
-from release_agent import ReleaseAgent
-from k14_knowledge_keeper import KnowledgeKeeperAgent
-from k15_change_propagation import ChangePropagationAgent
-from fast_channel_classifier import FastChannelClassifier
+
+# ── Phase 3+ agents (disabled for now — enable when stages 3-4 go live)
+# from a6_spec_decomposer import SpecDecomposerAgent
+# from a7_test_case_generator import TestCaseGeneratorAgent
+# from a8_architecture_expert import ArchitectureExpertAgent
+# from a9.a9_dev_agent import A9DevAgent
+# from ci_agent import CICDAgent
+# from a11_test_agent_stub import A11TestAgentStub
+# from a12_code_review import CodeReviewAgent
+# from release_agent import ReleaseAgent
+# from k14_knowledge_keeper import KnowledgeKeeperAgent
+# from k15_change_propagation import ChangePropagationAgent
+# from fast_channel_classifier import FastChannelClassifier
 
 logging.basicConfig(
     level=logging.INFO,
@@ -62,35 +67,33 @@ logger = logging.getLogger("worker_launcher")
 # Agent 注册表
 AGENT_REGISTRY: dict[BaseAgentWorker, str] = {}
 
-# A9 multi-instance config
-A9_WORKER_COUNT = int(os.environ.get("A9_WORKER_COUNT", "1"))
-A9_CONCURRENT_PER_INSTANCE = int(os.environ.get("A9_CONCURRENT", "3"))
+# ── Phase 1 + Phase 2 agents: A1 + A2 + A3 + A4 + A5 ─────────────────
+_PHASE1_AGENTS = [
+    A1RequirementIntake(),
+    A2KnowledgeAnalyst(),
+    UIGeneratorAgent(),
+    A4SpecWriter(),
+    DesignReviewAgent(),
+]
 
 
 def register_agents():
-    """注册所有 Agent Worker。"""
-    agents = [
-        A1RequirementIntake(),
-        A2KnowledgeAnalyst(),
-        UIGeneratorAgent(),
-        A4SpecWriter(),
-        DesignReviewAgent(),
-        SpecDecomposerAgent(),
-        TestCaseGeneratorAgent(),
-        ArchitectureExpertAgent(),
-    ]
-    # Multiple A9 instances for horizontal scaling via NATS queue group
-    for i in range(A9_WORKER_COUNT):
-        agents.append(A9DevAgent(instance_id=i, max_concurrent=A9_CONCURRENT_PER_INSTANCE))
-    agents.extend([
-        CICDAgent(),
-        A11TestAgentStub(),
-        CodeReviewAgent(),
-        ReleaseAgent(),
-        KnowledgeKeeperAgent(),
-        ChangePropagationAgent(),
-        FastChannelClassifier(),
-    ])
+    """注册当前阶段启用的 Agent Worker。"""
+    agents = list(_PHASE1_AGENTS)
+
+    # ── Phase 2+ agents (disabled until their stages go live) ─────────
+    # A9_WORKER_COUNT = int(os.environ.get("A9_WORKER_COUNT", "1"))
+    # for i in range(A9_WORKER_COUNT):
+    #     agents.append(A9DevAgent(...))
+    # agents.extend([
+    #     UIGeneratorAgent(), A4SpecWriter(), DesignReviewAgent(),
+    #     SpecDecomposerAgent(), TestCaseGeneratorAgent(),
+    #     ArchitectureExpertAgent(), CICDAgent(), A11TestAgentStub(),
+    #     CodeReviewAgent(), ReleaseAgent(),
+    #     KnowledgeKeeperAgent(), ChangePropagationAgent(),
+    #     FastChannelClassifier(),
+    # ])
+
     for agent in agents:
         activity_name = f"{agent.agent_id}_{agent.agent_type}"
         AGENT_REGISTRY[agent] = activity_name
@@ -100,8 +103,8 @@ def register_agents():
 
 async def main():
     logger.info("=" * 60)
-    logger.info("  Agent Workers Launcher — AI Native Platform")
-    logger.info(f"  Total Agents: 16 (A1-A13, K14-K15, FC)")
+    logger.info("  Agent Workers Launcher — AI Native Platform (Phase 1+2)")
+    logger.info(f"  Total Agents: {len(_PHASE1_AGENTS)} (A1 + A2 + A3 + A4 + A5)")
     logger.info("=" * 60)
 
     agents = register_agents()
@@ -120,7 +123,6 @@ async def main():
     logger.info("Bridge task created")
 
     # Step 3: Subscribe agents — each only to context.ready.{agent_type}
-    # No extra_subjects — Orchestrator is the sole dispatcher
     logger.info("Starting NATS subscriptions (single-subject per agent)...")
     for agent in AGENT_REGISTRY:
         await agent.subscribe_nats()

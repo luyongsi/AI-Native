@@ -261,6 +261,16 @@ def upgrade() -> None:
             "AND reviewer_user_id IS NOT NULL AND reviewed_at IS NOT NULL)"
         ),
     )
+    op.create_check_constraint(
+        "ck_agent_results_status",
+        "agent_results",
+        sa.text("status IN ('completed', 'empty', 'skipped')"),
+    )
+    op.create_check_constraint(
+        "ck_approvals_decision_value",
+        "approvals",
+        sa.text("decision IS NULL OR decision IN ('pass', 'reject')"),
+    )
 
 
 def downgrade() -> None:

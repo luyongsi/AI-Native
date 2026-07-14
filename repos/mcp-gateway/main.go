@@ -14,7 +14,12 @@ import (
 
 func main() {
 	registry := server.NewToolRegistry()
-	router := server.NewToolRouter(registry)
+
+	mcBackendURL := os.Getenv("MC_BACKEND_URL")
+	if mcBackendURL == "" {
+		mcBackendURL = "http://localhost:8000"
+	}
+	router := server.NewToolRouter(registry, mcBackendURL)
 	mcp := server.NewMCPServer(registry, router)
 
 	jwtAuth := auth.NewJWTAuth()

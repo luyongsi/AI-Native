@@ -82,14 +82,14 @@ _GATE_GRACE_PERIOD: dict[int, timedelta | None] = {
 # ANALYZING is NOT in _AGENT_STATES — workflow waits for agent_completed Signal instead
 _AGENT_STATES: set[RS] = {
     RS.KNOWLEDGE_ANALYSIS,  # A2 — NATS dispatch
-    RS.DESIGNING, RS.REVIEWING, RS.DECOMPOSING,
+    RS.SPEC_WRITING, RS.REVIEWING, RS.DECOMPOSING,
     RS.DEVELOPING, RS.TESTING, RS.REVIEWING_CODE, RS.RELEASING,
 }
 
 # States that require gate approval
 _GATED_STATES: dict[RS, int] = {
     RS.KNOWLEDGE_ANALYSIS: 0,  # Gate 0 after A2
-    RS.DESIGNING: 1,
+    RS.REVIEWING: 1,            # Gate 1 after A5 design review
     RS.DECOMPOSING: 2,
     RS.REVIEWING_CODE: 3,
 }
@@ -200,10 +200,15 @@ class RequirementWorkflow:
         context_str = str(ctx)
 
         if state == RS.DESIGNING:
-            # DESIGNING: dispatch A3 and A4 in parallel
-            # If this is a rework, inject previous A5 review feedback
-            review_feedback = self._last_a5_result if self._rework_count > 0 else None
-            await self._run_designing_parallel(req_id, wf_id, context_str, timeout, review_feedback, ctx)
+            # DESIGNING: dispatch A3 only（用户通过 HTTP+SSE 确认后发布 agent.result.A3）
+            # A3 确认后 Orchestrator 转换到 spec_writing → context.ready.A4
+            # Note: A3 is primarily HTTP+SSE driven; the NATS dispatch here serves
+            # as a notification that the design phase has started. A3's actual
+            # generation/annotation/confirm flow happens via MC Backend endpoints.
+            # Once A3 confirms (agent.result.A3 received), workflow advances to
+            # KNOWLEDGE_ANALYSIS-style wait for the A3 → A4 transition via state machine.
+            agent_id = "A3"
+            await self._dispatch_and_wait(req_id, agent_id, wf_id, context_str, timeout, ctx_meta=ctx)
         elif state == RS.DEVELOPING and self._last_test_result:
             # Inner loop: A11 test failed, inject failure feedback into A9 context
             import json as _json
@@ -593,7 +598,9 @@ class RequirementWorkflow:
             RS.DRAFT: "A1",
             RS.ANALYZING: "A1",              # HTTP+SSE, not dispatched
             RS.KNOWLEDGE_ANALYSIS: "A2",     # new A2 knowledge analysis
-            RS.REVIEWING: "A5",
+            RS.DESIGNING: "A3",              # A3 UI prototype (HTTP+SSE)
+            RS.SPEC_WRITING: "A4",           # A4 Spec/OpenAPI/ERD/DDL
+            RS.REVIEWING: "A5",              # A5 design review
             RS.DECOMPOSING: "A6",
             RS.DEVELOPING: "A9",
             RS.TESTING: "A11",
@@ -643,20 +650,15 @@ class RequirementWorkflow:
                 )
                 return RS.BLOCKED
 
-        # REVIEWING -> check A5 result for rework
+        # REVIEWING (A5) — non-blocking design check, always advance
+        # A5 produces a report, never a pass/fail verdict.
+        # Rework is driven by Gate1 rejection, not by A5.
         if current == RS.REVIEWING:
-            a5_pass = False
             if self._agent_result:
-                a5_pass = self._agent_result.get("pass", False)
-            if not a5_pass and self._rework_count < _MAX_REWORK:
-                self._rework_count += 1
-                workflow.logger.info(
-                    "Rework #%d: REVIEWING -> DESIGNING", self._rework_count
-                )
-                if self._agent_result:
-                    self._last_a5_result = self._agent_result
-                return RS.DESIGNING
-            # Either passed or max rework reached
+                self._last_a5_result = self._agent_result
+            workflow.logger.info(
+                "A5 design review complete (non-blocking) — advancing to DECOMPOSING"
+            )
             return RS.DECOMPOSING
 
         # T8: TESTING fail → back to DEVELOPING (inner loop, max 2)

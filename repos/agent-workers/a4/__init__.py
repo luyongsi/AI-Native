@@ -1,6 +1,8 @@
 """A4: Spec Writer sub-modules.
 
 Sub-modules:
+  - spec_generator: 6-chapter structured spec document generation via LLM
+  - knowledge_client: MCP knowledge retrieval (openapi templates, ERD patterns, DDL conventions)
   - api_schema_gen: OpenAPI 3.1 spec generation from requirements (legacy)
   - api_schema_generator: OpenAPI 3.1 spec generation with LLM and validation
   - schema_validator: OpenAPI 3.1 specification validation
@@ -17,6 +19,8 @@ from .erd_designer import ERDDesigner
 from .erd_generator import ERDGenerator
 from .ddl_validator import DDLValidator
 from .spec_completeness import SpecCompleteness
+from .spec_generator import SpecGenerator
+from .knowledge_client import A4KnowledgeClient
 
 __all__ = [
     "OpenAPIGenerator",
@@ -26,4 +30,6 @@ __all__ = [
     "ERDGenerator",
     "DDLValidator",
     "SpecCompleteness",
+    "SpecGenerator",
+    "A4KnowledgeClient",
 ]

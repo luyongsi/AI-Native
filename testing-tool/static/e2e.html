@@ -1,0 +1,722 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>E2E Pipeline Test Dashboard</title>
+<style>
+  :root {
+    --bg: #0f1117;
+    --surface: #1a1d27;
+    --surface2: #212430;
+    --border: #2a2d3a;
+    --text: #e1e4e8;
+    --text-dim: #8b949e;
+    --green: #3fb950;
+    --red: #f85149;
+    --blue: #58a6ff;
+    --yellow: #d2991d;
+    --purple: #ab7df8;
+    --cyan: #56d4dd;
+    --orange: #f0883e;
+    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+    color: var(--text);
+    background: var(--bg);
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body { max-width: 1400px; margin: 0 auto; padding: 24px; min-height: 100vh; }
+
+  /* ── Header ── */
+  .header {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 24px; padding-bottom: 16px; border-bottom: 1px solid var(--border);
+  }
+  .header h1 { font-size: 1.4rem; font-weight: 700; }
+  .header .subtitle { font-size: 0.8rem; color: var(--text-dim); }
+  .header-right { display: flex; gap: 8px; align-items: center; }
+  .badge {
+    font-size: 0.72rem; padding: 3px 10px; border-radius: 12px;
+    font-weight: 500;
+  }
+  .badge.idle { background: rgba(139,148,158,0.15); color: var(--text-dim); }
+  .badge.running { background: rgba(88,166,255,0.15); color: var(--blue); }
+  .badge.ok { background: rgba(63,185,80,0.15); color: var(--green); }
+  .badge.fail { background: rgba(248,81,73,0.15); color: var(--red); }
+
+  /* ── Layout ── */
+  .grid-2 { display: grid; grid-template-columns: 1fr 2fr; gap: 20px; }
+  .grid-full { grid-column: 1 / -1; }
+
+  .card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 10px; overflow: hidden;
+  }
+  .card-header {
+    padding: 14px 18px; border-bottom: 1px solid var(--border);
+    font-size: 0.9rem; font-weight: 600;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .card-body { padding: 16px 18px; }
+
+  /* ── Preset scenarios ── */
+  .preset-list { display: flex; flex-direction: column; gap: 8px; }
+  .preset-item {
+    background: var(--surface2); border: 1px solid var(--border);
+    border-radius: 8px; padding: 12px 14px; cursor: pointer;
+    transition: all 0.15s; display: flex; align-items: center; gap: 10px;
+  }
+  .preset-item:hover { border-color: var(--blue); background: rgba(88,166,255,0.05); }
+  .preset-item.active { border-color: var(--blue); background: rgba(88,166,255,0.08); }
+  .preset-item .icon { font-size: 1.3rem; width: 32px; text-align: center; flex-shrink: 0; }
+  .preset-item .info { flex: 1; min-width: 0; }
+  .preset-item .name { font-size: 0.85rem; font-weight: 500; }
+  .preset-item .desc { font-size: 0.72rem; color: var(--text-dim); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .preset-item .check { color: var(--green); font-size: 1.1rem; display: none; }
+  .preset-item.active .check { display: block; }
+
+  /* ── Custom input ── */
+  .input-group { margin-bottom: 12px; }
+  .input-group label {
+    display: block; font-size: 0.78rem; color: var(--text-dim);
+    margin-bottom: 4px; font-weight: 500;
+  }
+  .input-group input, .input-group textarea {
+    width: 100%; background: var(--bg); border: 1px solid var(--border);
+    color: var(--text); padding: 10px 12px; border-radius: 6px;
+    font-size: 0.88rem; outline: none; font-family: inherit;
+    resize: vertical;
+  }
+  .input-group textarea { min-height: 72px; }
+  .input-group input:focus, .input-group textarea:focus { border-color: var(--blue); }
+
+  /* ── Buttons ── */
+  button {
+    background: var(--blue); color: #fff; border: none; padding: 10px 20px;
+    border-radius: 8px; cursor: pointer; font-size: 0.88rem; font-weight: 600;
+    transition: all 0.15s; display: inline-flex; align-items: center; gap: 6px;
+  }
+  button:hover { opacity: 0.88; }
+  button:disabled { opacity: 0.4; cursor: not-allowed; }
+  button.full { width: 100%; justify-content: center; }
+  button.large { padding: 14px 28px; font-size: 1rem; border-radius: 10px; }
+  button.run { background: var(--green); }
+  button.run:hover { background: #35a044; }
+  button.secondary { background: var(--border); color: var(--text); }
+  button.danger { background: var(--red); }
+
+  /* ── Progress panel (right side) ── */
+  .empty-state {
+    text-align: center; padding: 40px 20px; color: var(--text-dim);
+  }
+  .empty-state .big-icon { font-size: 2.5rem; margin-bottom: 12px; }
+
+  /* Step progress list */
+  .step-list { display: flex; flex-direction: column; gap: 2px; }
+  .step-item {
+    display: flex; align-items: center; gap: 10px; padding: 10px 14px;
+    border-radius: 6px; font-size: 0.84rem; transition: background 0.2s;
+  }
+  .step-item .step-icon { width: 26px; height: 26px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 0.8rem; flex-shrink: 0; }
+  .step-item.running { background: rgba(88,166,255,0.06); }
+  .step-item.running .step-icon { background: rgba(88,166,255,0.2); color: var(--blue); }
+  .step-item.passed { background: rgba(63,185,80,0.04); }
+  .step-item.passed .step-icon { background: rgba(63,185,80,0.2); color: var(--green); }
+  .step-item.failed { background: rgba(248,81,73,0.06); }
+  .step-item.failed .step-icon { background: rgba(248,81,73,0.2); color: var(--red); }
+  .step-item.warning { background: rgba(240,136,62,0.04); }
+  .step-item.warning .step-icon { background: rgba(240,136,62,0.2); color: var(--orange); }
+  .step-item.pending .step-icon { background: rgba(139,148,158,0.1); color: var(--text-dim); }
+
+  .step-item .step-body { flex: 1; min-width: 0; }
+  .step-item .step-name { font-weight: 500; }
+  .step-item .step-detail { font-size: 0.74rem; color: var(--text-dim); margin-top: 2px; }
+  .step-item .step-tag { font-size: 0.7rem; padding: 2px 8px; border-radius: 4px; font-weight: 500; }
+
+  /* Verdict banner */
+  .verdict-banner {
+    padding: 20px 24px; border-radius: 10px; text-align: center; margin-bottom: 16px;
+  }
+  .verdict-banner.pass { background: rgba(63,185,80,0.08); border: 1px solid rgba(63,185,80,0.3); }
+  .verdict-banner.fail { background: rgba(248,81,73,0.08); border: 1px solid rgba(248,81,73,0.3); }
+  .verdict-banner .verdict-icon { font-size: 2.5rem; margin-bottom: 8px; }
+  .verdict-banner .verdict-text { font-size: 1.2rem; font-weight: 700; }
+  .verdict-banner.pass .verdict-text { color: var(--green); }
+  .verdict-banner.fail .verdict-text { color: var(--red); }
+  .verdict-banner .verdict-detail { font-size: 0.78rem; color: var(--text-dim); margin-top: 4px; }
+
+  /* History table */
+  .history-table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
+  .history-table th {
+    text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--border);
+    color: var(--text-dim); font-weight: 500; font-size: 0.74rem; text-transform: uppercase;
+  }
+  .history-table td {
+    padding: 10px 12px; border-bottom: 1px solid var(--border);
+  }
+  .history-table tr { cursor: pointer; transition: background 0.1s; }
+  .history-table tr:hover { background: rgba(88,166,255,0.04); }
+  .history-table .verdict-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+  .history-table .verdict-dot.pass { background: var(--green); }
+  .history-table .verdict-dot.fail { background: var(--red); }
+
+  /* Spinner */
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .spinner { width: 16px; height: 16px; border: 2px solid rgba(88,166,255,0.3); border-top-color: var(--blue); border-radius: 50%; animation: spin 0.8s linear infinite; display: inline-block; }
+
+  /* Step details expand */
+  .step-extra { font-size: 0.74rem; color: var(--text-dim); margin-top: 6px; padding: 6px 10px; background: var(--bg); border-radius: 4px; display: none; }
+  .step-item.expanded .step-extra { display: block; }
+
+  /* Tab bar */
+  .tab-bar { display: flex; gap: 0; margin-bottom: 16px; border-bottom: 1px solid var(--border); }
+  .tab-btn {
+    padding: 8px 16px; font-size: 0.84rem; font-weight: 500; cursor: pointer;
+    background: none; border: none; border-bottom: 2px solid transparent;
+    color: var(--text-dim); transition: all 0.15s;
+  }
+  .tab-btn:hover { color: var(--text); }
+  .tab-btn.active { color: var(--blue); border-bottom-color: var(--blue); }
+
+  .tab-content { display: none; }
+  .tab-content.active { display: block; }
+
+  /* Scrollbar */
+  ::-webkit-scrollbar { width: 5px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+  /* Responsive */
+  @media (max-width: 800px) {
+    .grid-2 { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<!-- ═══════════════ Header ═══════════════ -->
+<div class="header">
+  <div>
+    <h1>E2E Pipeline Test</h1>
+    <div class="subtitle">完整流程验证: 创建需求 → A1 对话 → 确认 → 触发工作流 → A2 分析 → Gate0 审批</div>
+  </div>
+  <div class="header-right">
+    <span class="badge idle" id="status-badge">Idle</span>
+    <button class="secondary" onclick="loadHistory()">History</button>
+  </div>
+</div>
+
+<!-- ═══════════════ Tab bar ═══════════════ -->
+<div class="tab-bar">
+  <button class="tab-btn active" onclick="switchTab('run')">Run Test</button>
+  <button class="tab-btn" onclick="switchTab('history')">Test Reports</button>
+</div>
+
+<!-- ═══════════════ Run Tab ═══════════════ -->
+<div class="tab-content active" id="tab-run">
+<div class="grid-2">
+
+  <!-- Left: setup -->
+  <div>
+    <div class="card" style="margin-bottom:16px">
+      <div class="card-header">&#x1F4E6; Preset Scenarios</div>
+      <div class="card-body">
+        <div class="preset-list" id="preset-list">
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">&#x270F; Custom Test</div>
+      <div class="card-body">
+        <div class="input-group">
+          <label>需求标题 *</label>
+          <input type="text" id="custom-title" placeholder="e.g. 用户订单退款流程">
+        </div>
+        <div class="input-group">
+          <label>需求描述（A1 分析输入）</label>
+          <textarea id="custom-message" placeholder="Describe what you want A1 to analyze..."></textarea>
+        </div>
+        <button class="full large run" id="btn-run" onclick="startTest()">
+          &#x25B6; Run E2E Test
+        </button>
+        <div style="margin-top:8px;text-align:center">
+          <button class="secondary" id="btn-stop" style="display:none" onclick="stopTest()">
+            Stop
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Right: live progress -->
+  <div class="card" id="progress-card">
+    <div class="card-header">
+      Live Progress
+      <span style="margin-left:auto;font-size:0.74rem;color:var(--text-dim)" id="run-id-display"></span>
+    </div>
+    <div class="card-body" id="progress-area">
+      <div class="empty-state">
+        <div class="big-icon">&#x1F3C3;</div>
+        <div>Select a preset or enter a custom test, then click <strong>Run E2E Test</strong>.</div>
+        <div style="margin-top:6px;font-size:0.8rem;color:var(--text-dim)">
+          7 steps: Create → Infra Check → A1 Dialogue → Confirm → Trigger WF → A2 Analysis → Gate0
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+</div>
+
+<!-- ═══════════════ History Tab ═══════════════ -->
+<div class="tab-content" id="tab-history">
+  <div class="card">
+    <div class="card-header">&#x1F4CA; Test Reports <span style="margin-left:auto;font-size:0.78rem;color:var(--text-dim)" id="history-count"></span></div>
+    <div class="card-body" style="overflow-x:auto">
+      <table class="history-table" id="history-table-body">
+      </table>
+      <div id="history-empty" class="empty-state" style="display:none">
+        <div class="big-icon">&#x1F4CB;</div>
+        <div>No test reports yet. Run your first E2E test!</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Detail view -->
+  <div class="card" id="history-detail-card" style="display:none;margin-top:16px">
+    <div class="card-header">&#x1F50D; Report Detail <span id="history-detail-title" style="color:var(--text-dim)"></span></div>
+    <div class="card-body" id="history-detail-body"></div>
+  </div>
+</div>
+
+<script>
+// ═══════════════════════════════════════════════ State
+let currentRunId = null;
+let currentEventSource = null;
+let selectedPreset = null;
+let isRunning = false;
+
+// ═══════════════════════════════════════════════ Presets
+const PRESETS = [
+  {
+    id: 'login',
+    icon: '🔐',
+    name: 'User Login System',
+    message: '用户可以通过用户名密码登录，支持记住我、密码重置、3次失败锁定，支持手机号验证码登录',
+  },
+  {
+    id: 'order',
+    icon: '📦',
+    name: 'Order Management',
+    message: '订单管理系统，支持订单CRUD、状态工作流（待支付→已支付→发货中→已签收→已完成）、支付回调、分页筛选',
+  },
+  {
+    id: 'phone',
+    icon: '📱',
+    name: 'Phone Number Binding',
+    message: '用户可以在个人中心绑定、解绑手机号。绑定流程：输入手机号→获取验证码→输入验证码→绑定成功。手机号可用于登录和密码找回',
+  },
+  {
+    id: 'refund',
+    icon: '💰',
+    name: 'Refund Flow',
+    message: '用户在订单详情页发起退款，支持原路返回和余额退款两种方式。退款流程：申请退款→商家审核→退款处理→到账通知。需要记录退款原因和审核意见',
+  },
+  {
+    id: 'rbac',
+    icon: '👥',
+    name: 'RBAC Permission System',
+    message: '企业级角色权限管理系统，支持用户-角色-权限三层模型。管理员可以创建角色、分配权限、批量导入用户。权限包括菜单权限、按钮权限、数据权限三个维度',
+  },
+];
+
+// ═══════════════════════════════════════════════ Init
+function init() {
+  renderPresets();
+  loadHistory();
+}
+init();
+
+function renderPresets() {
+  const el = document.getElementById('preset-list');
+  el.innerHTML = PRESETS.map(p => `
+    <div class="preset-item ${selectedPreset === p.id ? 'active' : ''}" onclick="selectPreset('${p.id}')">
+      <span class="icon">${p.icon}</span>
+      <div class="info">
+        <div class="name">${esc(p.name)}</div>
+        <div class="desc">${esc(p.message)}</div>
+      </div>
+      <span class="check">✓</span>
+    </div>
+  `).join('');
+}
+
+function selectPreset(id) {
+  selectedPreset = id;
+  const preset = PRESETS.find(p => p.id === id);
+  if (preset) {
+    document.getElementById('custom-title').value = preset.name;
+    document.getElementById('custom-message').value = preset.message;
+  }
+  renderPresets();
+}
+
+// ═══════════════════════════════════════════════ Tabs
+function switchTab(tab) {
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+  document.querySelector(`.tab-btn:${tab === 'run' ? 'first-child' : 'last-child'}`).classList.add('active');
+  document.getElementById(`tab-${tab}`).classList.add('active');
+  if (tab === 'history') loadHistory();
+}
+
+// ═══════════════════════════════════════════════ Run test
+async function startTest() {
+  const title = document.getElementById('custom-title').value.trim();
+  let message = document.getElementById('custom-message').value.trim();
+
+  if (!title) { alert('Please enter a requirement title'); return; }
+  if (!message) message = title;
+  if (isRunning) return;
+
+  isRunning = true;
+  document.getElementById('btn-run').disabled = true;
+  document.getElementById('btn-stop').style.display = 'inline-block';
+  document.getElementById('status-badge').textContent = 'Running';
+  document.getElementById('status-badge').className = 'badge running';
+
+  // Reset progress area
+  const steps = [
+    { key: 'create_req', name: 'Create Requirement', icon: '📝' },
+    { key: 'infra_check', name: 'Infrastructure Check', icon: '🏗' },
+    { key: 'a1_dialogue', name: 'A1 Dialogue Analysis', icon: '🤖' },
+    { key: 'confirm', name: 'Confirm Dialogue', icon: '✅' },
+    { key: 'trigger_wf', name: 'Trigger Workflow', icon: '🚀' },
+    { key: 'a2_analysis', name: 'A2 Knowledge Analysis', icon: '🔍' },
+    { key: 'gate0_record', name: 'Gate0 Approval Record', icon: '🚦' },
+  ];
+
+  let progressHtml = '<div style="margin-bottom:12px"><span class="spinner"></span> Starting...</div>';
+  progressHtml += '<div class="step-list">';
+  steps.forEach(s => {
+    progressHtml += `<div class="step-item pending" id="step-${s.key}">
+      <span class="step-icon">${s.icon}</span>
+      <div class="step-body">
+        <span class="step-name">${s.name}</span>
+        <div class="step-detail">Waiting...</div>
+      </div>
+      <span class="step-tag" style="color:var(--text-dim)">pending</span>
+    </div>`;
+  });
+  progressHtml += '</div>';
+  document.getElementById('progress-area').innerHTML = progressHtml;
+
+  // Call API
+  try {
+    const resp = await fetch('/api/tests/e2e/run', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title, message }),
+    });
+    const data = await resp.json();
+    if (!data.ok) throw new Error(data.error || 'Failed to start');
+    currentRunId = data.run_id;
+    document.getElementById('run-id-display').textContent = 'run: ' + data.run_id.slice(0, 12) + '...';
+
+    // Connect to SSE stream
+    connectSSE(data.run_id);
+  } catch (e) {
+    handleError('Failed to start test: ' + e.message);
+  }
+}
+
+function stopTest() {
+  if (currentEventSource) {
+    currentEventSource.close();
+    currentEventSource = null;
+  }
+  isRunning = false;
+  document.getElementById('btn-run').disabled = false;
+  document.getElementById('btn-stop').style.display = 'none';
+  document.getElementById('status-badge').textContent = 'Idle';
+  document.getElementById('status-badge').className = 'badge idle';
+}
+
+// ═══════════════════════════════════════════════ SSE
+function connectSSE(runId) {
+  currentEventSource = new EventSource(`/api/tests/e2e/stream/${runId}`);
+
+  const steps = ['create_req', 'infra_check', 'a1_dialogue', 'confirm', 'trigger_wf', 'a2_analysis', 'gate0_record'];
+  let a1LogCount = 0;
+
+  currentEventSource.addEventListener('step-update', (e) => {
+    const entry = JSON.parse(e.data);
+    updateStepUI(entry);
+
+    // Update running step indicator
+    if (entry.status === 'running') {
+      steps.forEach(s => {
+        const el = document.getElementById(`step-${s}`);
+        if (el && s === entry.step) {
+          el.classList.remove('pending', 'passed', 'failed', 'warning');
+          el.classList.add('running');
+          el.querySelector('.step-tag').textContent = 'running';
+          el.querySelector('.step-tag').style.color = 'var(--blue)';
+        }
+      });
+    }
+  });
+
+  currentEventSource.addEventListener('step-log', (e) => {
+    const data = JSON.parse(e.data);
+    if (data.step === 'a1_dialogue') {
+      a1LogCount++;
+      const stepEl = document.getElementById('step-a1_dialogue');
+      if (stepEl) {
+        stepEl.querySelector('.step-detail').textContent =
+          `Events: ${a1LogCount} · ` + (data.event_type || '...');
+      }
+    }
+  });
+
+  currentEventSource.addEventListener('run-complete', (e) => {
+    const data = JSON.parse(e.data);
+    currentEventSource.close();
+    currentEventSource = null;
+    isRunning = false;
+    document.getElementById('btn-run').disabled = false;
+    document.getElementById('btn-stop').style.display = 'none';
+
+    if (data.verdict === 'pass') {
+      document.getElementById('status-badge').textContent = '✓ Pass';
+      document.getElementById('status-badge').className = 'badge ok';
+    } else {
+      document.getElementById('status-badge').textContent = '✗ Fail';
+      document.getElementById('status-badge').className = 'badge fail';
+    }
+
+    // Show verdict banner
+    showVerdict(data);
+
+    // Refresh history
+    loadHistory();
+  });
+
+  currentEventSource.addEventListener('run-error', (e) => {
+    const data = JSON.parse(e.data);
+    handleError(data.error || 'Unknown error');
+  });
+
+  currentEventSource.addEventListener('ping', () => { /* heartbeat */ });
+
+  currentEventSource.onerror = () => {
+    if (isRunning) {
+      // SSE connection lost while test is running — poll results
+      setTimeout(async () => {
+        try {
+          const r = await fetch(`/api/tests/e2e/results/${runId}`).then(r => r.json());
+          if (r && r.verdict) {
+            // Replay steps
+            Object.entries(r.steps || {}).forEach(([key, entry]) => updateStepUI(entry));
+            showVerdict({ verdict: r.verdict, steps: r.steps, run_id: r.run_id });
+            document.getElementById('status-badge').textContent =
+              r.verdict === 'pass' ? '✓ Pass' : '✗ Fail';
+            document.getElementById('status-badge').className =
+              `badge ${r.verdict === 'pass' ? 'ok' : 'fail'}`;
+            isRunning = false;
+            document.getElementById('btn-run').disabled = false;
+            document.getElementById('btn-stop').style.display = 'none';
+            loadHistory();
+          }
+        } catch(_) {}
+      }, 2000);
+    }
+  };
+}
+
+function updateStepUI(entry) {
+  const el = document.getElementById(`step-${entry.step}`);
+  if (!el) return;
+
+  el.classList.remove('running', 'pending', 'passed', 'failed', 'warning');
+  el.classList.add(entry.status);
+
+  const iconMap = {
+    'running': '<span class="spinner"></span>',
+    'passed': '✓', 'failed': '✗', 'warning': '⚠',
+  };
+  const iconLabelMap = {
+    'create_req': '📝', 'infra_check': '🏗', 'a1_dialogue': '🤖',
+    'confirm': '✅', 'trigger_wf': '🚀', 'a2_analysis': '🔍', 'gate0_record': '🚦',
+  };
+
+  const iconEl = el.querySelector('.step-icon');
+  if (entry.status === 'running') {
+    iconEl.innerHTML = '<span class="spinner"></span>';
+  } else {
+    iconEl.textContent = iconLabelMap[entry.step] || '?';
+  }
+
+  el.querySelector('.step-detail').textContent = entry.detail || '';
+  const tag = el.querySelector('.step-tag');
+  tag.textContent = entry.status;
+  const tagColors = {
+    'passed': 'var(--green)', 'failed': 'var(--red)',
+    'running': 'var(--blue)', 'warning': 'var(--orange)',
+  };
+  tag.style.color = tagColors[entry.status] || 'var(--text-dim)';
+
+  // Add extra info for passed steps
+  if (entry.status === 'passed' && entry.step === 'a1_dialogue' && entry.confidence != null) {
+    el.querySelector('.step-detail').textContent =
+      `Confidence: ${Math.round(entry.confidence * 100)}% · Draft: ${entry.draft_title || 'N/A'}`;
+  }
+  if (entry.status === 'passed' && entry.step === 'a2_analysis') {
+    el.querySelector('.step-detail').textContent =
+      `Quality: ${entry.quality_score != null ? Math.round(entry.quality_score * 100) + '%' : 'N/A'} · ` +
+      `Checklist: ${entry.checklist_count || 0} · Conflicts: ${entry.conflicts_count || 0}`;
+  }
+}
+
+function showVerdict(data) {
+  const pass = data.verdict === 'pass';
+  const area = document.getElementById('progress-area');
+  const banner = document.createElement('div');
+  banner.className = `verdict-banner ${pass ? 'pass' : 'fail'}`;
+  banner.style.marginTop = '16px';
+  banner.innerHTML = `
+    <div class="verdict-icon">${pass ? '&#x2705;' : '&#x274C;'}</div>
+    <div class="verdict-text">${pass ? 'All Steps Passed' : 'Test Failed'}</div>
+    <div class="verdict-detail">Run ID: ${data.run_id} · ${new Date().toLocaleString('zh-CN')}</div>
+  `;
+  area.appendChild(banner);
+}
+
+function handleError(msg) {
+  isRunning = false;
+  document.getElementById('btn-run').disabled = false;
+  document.getElementById('btn-stop').style.display = 'none';
+  document.getElementById('status-badge').textContent = '✗ Error';
+  document.getElementById('status-badge').className = 'badge fail';
+
+  const area = document.getElementById('progress-area');
+  const err = document.createElement('div');
+  err.style.cssText = 'padding:12px;border-radius:6px;background:rgba(248,81,73,0.08);border:1px solid rgba(248,81,73,0.3);color:var(--red);font-size:0.84rem;margin-top:12px';
+  err.textContent = 'Error: ' + msg;
+  area.appendChild(err);
+}
+
+// ═══════════════════════════════════════════════ History
+async function loadHistory() {
+  try {
+    const r = await fetch('/api/tests/e2e/history?limit=50').then(r => r.json());
+    const items = r.items || [];
+    document.getElementById('history-count').textContent = `${items.length} runs`;
+
+    const tbody = document.getElementById('history-table-body');
+    const empty = document.getElementById('history-empty');
+
+    if (items.length === 0) {
+      tbody.innerHTML = '';
+      empty.style.display = 'block';
+      return;
+    }
+
+    empty.style.display = 'none';
+    tbody.innerHTML = `
+      <tr>
+        <th>Run ID</th><th>Time</th><th>Title</th>
+        <th>Verdict</th><th>Steps</th><th>Duration</th>
+      </tr>
+    ` + items.map(h => {
+      const pass = h.verdict === 'pass';
+      const stepsPassed = Object.values(h.steps || {}).filter(s => s.status === 'passed').length;
+      const stepsTotal = Object.values(h.steps || {}).length;
+      let duration = '';
+      if (h.started_at && h.finished_at) {
+        const d = (new Date(h.finished_at) - new Date(h.started_at)) / 1000;
+        duration = d < 60 ? `${Math.round(d)}s` : `${Math.floor(d/60)}m${Math.round(d%60)}s`;
+      }
+      return `<tr onclick="viewHistoryDetail('${h.run_id}')">
+        <td style="font-family:Consolas,monospace;font-size:0.76rem">${esc(h.run_id.slice(0,18))}...</td>
+        <td style="color:var(--text-dim);font-size:0.76rem">${(h.started_at||'').slice(0,19).replace('T',' ')}</td>
+        <td>${esc(h.title||'?')}</td>
+        <td><span class="verdict-dot ${pass?'pass':'fail'}"></span> ${pass?'PASS':'FAIL'}</td>
+        <td style="font-size:0.76rem">${stepsPassed}/${stepsTotal}</td>
+        <td style="color:var(--text-dim);font-size:0.76rem">${duration}</td>
+      </tr>`;
+    }).join('');
+  } catch(e) {
+    console.error('loadHistory error', e);
+  }
+}
+
+function viewHistoryDetail(runId) {
+  fetch(`/api/tests/e2e/results/${runId}`)
+    .then(r => r.json())
+    .then(h => {
+      const card = document.getElementById('history-detail-card');
+      const title = document.getElementById('history-detail-title');
+      const body = document.getElementById('history-detail-body');
+
+      card.style.display = 'block';
+      title.textContent = `Run ${h.run_id} · ${h.title || ''}`;
+
+      const pass = h.verdict === 'pass';
+      let html = `<div class="verdict-banner ${pass?'pass':'fail'}" style="margin-bottom:16px">
+        <div class="verdict-icon">${pass ? '&#x2705;' : '&#x274C;'}</div>
+        <div class="verdict-text">${pass ? 'All Steps Passed' : 'Test Failed'}</div>
+      </div>`;
+
+      html += '<div class="step-list">';
+      const stepMeta = {
+        'create_req': ['Create Requirement', '📝'],
+        'infra_check': ['Infrastructure Check', '🏗'],
+        'a1_dialogue': ['A1 Dialogue Analysis', '🤖'],
+        'confirm': ['Confirm Dialogue', '✅'],
+        'trigger_wf': ['Trigger Workflow', '🚀'],
+        'a2_analysis': ['A2 Knowledge Analysis', '🔍'],
+        'gate0_record': ['Gate0 Approval Record', '🚦'],
+      };
+      Object.entries(h.steps || {}).forEach(([key, entry]) => {
+        const [name, icon] = stepMeta[key] || [key, '•'];
+        let extra = '';
+        if (entry.error) extra = `<div style="color:var(--red);margin-top:4px">Error: ${esc(entry.error)}</div>`;
+        if (entry.confidence != null) extra += `<div>Confidence: ${Math.round(entry.confidence*100)}%</div>`;
+        if (entry.quality_score != null) extra += `<div>Quality: ${Math.round(entry.quality_score*100)}%</div>`;
+        html += `<div class="step-item ${entry.status}">
+          <span class="step-icon">${icon}</span>
+          <div class="step-body">
+            <span class="step-name">${name}</span>
+            <div class="step-detail">${esc(entry.detail||'')}${extra}</div>
+          </div>
+          <span class="step-tag" style="color:${entry.status==='passed'?'var(--green)':entry.status==='failed'?'var(--red)':entry.status==='warning'?'var(--orange)':'var(--text-dim)'}">${entry.status}</span>
+        </div>`;
+      });
+      html += '</div>';
+
+      if (h.finished_at && h.started_at) {
+        const d = (new Date(h.finished_at) - new Date(h.started_at)) / 1000;
+        const dur = d < 60 ? `${Math.round(d)}s` : `${Math.floor(d/60)}m${Math.round(d%60)}s`;
+        html += `<div style="margin-top:12px;font-size:0.78rem;color:var(--text-dim);text-align:center">
+          Total: ${dur} · Started: ${(h.started_at||'').slice(0,19)} · Finished: ${(h.finished_at||'').slice(0,19)}
+        </div>`;
+      }
+
+      body.innerHTML = html;
+      card.scrollIntoView({ behavior: 'smooth' });
+    })
+    .catch(e => console.error('viewHistoryDetail', e));
+}
+
+// ═══════════════════════════════════════════════ Helpers
+function esc(s) {
+  if (!s) return '';
+  const d = document.createElement('div');
+  d.textContent = typeof s === 'string' ? s : JSON.stringify(s);
+  return d.innerHTML;
+}
+</script>
+</body>
+</html>

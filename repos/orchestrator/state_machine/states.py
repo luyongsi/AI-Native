@@ -1,10 +1,10 @@
-"""RequirementState enum - all 12 states per spec-12."""
+"""RequirementState enum — 13-state machine for requirement processing."""
 
 from enum import StrEnum
 
 
 class RequirementState(StrEnum):
-    """14-state machine for requirement processing.
+    """13-state machine for requirement processing.
 
     Main pipeline:
         DRAFT -> ANALYZING (A1 via HTTP+SSE) -> KNOWLEDGE_ANALYSIS (A2)
@@ -22,6 +22,7 @@ class RequirementState(StrEnum):
     ANALYZING = "analyzing"
     KNOWLEDGE_ANALYSIS = "knowledge_analysis"  # A2 stage (new)
     DESIGNING = "designing"
+    SPEC_WRITING = "spec_writing"     # A4: generate Spec/OpenAPI/ERD/DDL
     REVIEWING = "reviewing"
     DECOMPOSING = "decomposing"
     DEVELOPING = "developing"
