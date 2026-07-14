@@ -25,19 +25,16 @@ async def _get_nats() -> nats.NATS:
 
 
 async def _sync_to_mc_backend(req_id: str, new_state: str, old_state: str, extra: dict) -> bool:
-    """Best-effort HTTP PUT to MC Backend. Returns True if synced, False on failure."""
+    """Best-effort POST to MC Backend. Returns True if synced, False on failure."""
     try:
         import httpx
         async with httpx.AsyncClient(timeout=5.0) as client:
-            resp = await client.put(
+            resp = await client.post(
                 f"{MC_BACKEND_URL}/api/requirements/{req_id}/status",
                 json={
                     "status": new_state,
-                    "old_state": old_state,
-                    "new_state": new_state,
-                    "event": extra,
-                    "agent_id": "orchestrator",
                 },
+                headers={"x-api-key": "dev-internal-key"},
             )
             resp.raise_for_status()
             return True

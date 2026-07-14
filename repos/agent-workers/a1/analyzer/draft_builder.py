@@ -1,12 +1,10 @@
-"""
-A1 Analyzer — DraftBuilder: LLM streaming requirement draft builder.
+"""DraftBuilder: LLM streaming requirement draft builder."""
 
-Streams LLM output, parses complete JSON objects from the buffer,
-and yields full requirement_draft dicts each time a parse succeeds.
-"""
 import json
 import logging
 import os
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
 from typing import AsyncGenerator
 
 logger = logging.getLogger(__name__)
@@ -14,6 +12,9 @@ logger = logging.getLogger(__name__)
 DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
 DEEPSEEK_BASE_URL = os.environ.get("DEEPSEEK_BASE_URL", "https://uniapi.ruijie.com.cn")
 DEEPSEEK_MODEL = os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-pro-202606")
+
+# Shared executor for running sync llm_provider calls in background thread
+_llm_executor = ThreadPoolExecutor(max_workers=4)
 
 SYSTEM_PROMPT_TEMPLATE = """你是一个资深需求分析师，帮助用户把模糊的想法澄清为结构化的需求文档。
 
@@ -105,6 +106,11 @@ class DraftBuilder:
         self.model = DEEPSEEK_MODEL
         self.base_url = DEEPSEEK_BASE_URL
         self.api_key = DEEPSEEK_API_KEY
+        self._last_req_id = None
+
+    def set_req_id(self, req_id: str):
+        """Set the current req_id for audit attribution."""
+        self._last_req_id = req_id
 
     async def stream_analyze(
         self, user_message: str, ctx: dict,
@@ -277,11 +283,63 @@ class DraftBuilder:
 
     # ------------------------------------------------------------------
     async def _stream_llm(self, messages: list[dict]) -> AsyncGenerator[str, None]:
-        """Call DeepSeek streaming API, yielding text chunks."""
+        """Call DeepSeek streaming API via llm_provider (sync), yielding text chunks.
+
+        llm_provider is synchronous, so we offload the actual HTTP call
+        to a thread-pool executor and yield the result as a single chunk.
+        Streaming chunks are still available via the direct fallback when
+        llm_provider is not installed.
+        """
         if not self.api_key:
             logger.warning("DEEPSEEK_API_KEY not set — cannot call LLM")
             return
 
+        try:
+            from llm_provider.audit import get_auditor
+            from llm_provider.manager import LLMProviderManager
+            from llm_provider.deepseek_adapter import DeepSeekAdapter
+            from llm_provider.context import LLMCallContext
+
+            def _call():
+                auditor = get_auditor(outputs=["file", "stdout"])
+                adapter = DeepSeekAdapter(
+                    api_key=self.api_key, base_url=self.base_url, model=self.model,
+                )
+                manager = LLMProviderManager(
+                    adapters={"deepseek": adapter},
+                    default_routes={"text": "deepseek"},
+                    auditor=auditor,
+                )
+                ctx = LLMCallContext(
+                    agent_id="A1",
+                    req_id=self._last_req_id or "UNKNOWN",
+                    task_type="requirement_analysis",
+                )
+                resp = manager.chat(
+                    messages=messages,
+                    model=self.model,
+                    temperature=0.7,
+                    max_tokens=4096,
+                    task_type="text",
+                    ctx=ctx,
+                )
+                return resp.content if resp else ""
+
+            loop = asyncio.get_event_loop()
+            full_text = await loop.run_in_executor(_llm_executor, _call)
+            if full_text:
+                yield full_text
+        except ImportError:
+            logger.debug("llm_provider not available, falling back to direct API call")
+            async for chunk in self._stream_llm_direct(messages):
+                yield chunk
+        except Exception as e:
+            logger.exception("LLM streaming via llm_provider failed, falling back to direct")
+            async for chunk in self._stream_llm_direct(messages):
+                yield chunk
+
+    async def _stream_llm_direct(self, messages: list[dict]) -> AsyncGenerator[str, None]:
+        """Direct DeepSeek streaming API fallback."""
         try:
             import httpx
 

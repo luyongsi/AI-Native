@@ -5,7 +5,7 @@ and knowledge from context-builder service (or direct DB fallback).
 
 Five-layer context model:
   1. requirement_context  — title, description, acceptance_criteria, A1 analysis
-  2. artifact_context     — upstream agent outputs from spec.artifacts JSONB
+  2. artifact_context     — upstream agent outputs from agent_results table
   3. knowledge_context    — similar requirements, relevant code, best practices, known issues
   4. environment_context  — project config, deployment URLs, tech stack, conventions
   5. rework_context       — round number, previous feedback/issues (supplied by Workflow)
@@ -218,24 +218,21 @@ def _parse_json(raw) -> dict:
     return raw if isinstance(raw, dict) else {}
 
 
-def _extract_requirement_context(row, spec: dict) -> dict:
-    source_payload = _parse_json(row.get("source_payload"))
+def _extract_requirement_context(row, requirement_draft: dict) -> dict:
     return {
         "title": row.get("title", ""),
-        "description": row.get("description", "") or source_payload.get("description", ""),
-        "acceptance_criteria": spec.get("acceptance_criteria", []),
-        "analysis": (spec.get("artifacts", {}).get("A1", {}) or {}).get("analysis", {}),
-        "source_type": row.get("source_type", ""),
+        "description": requirement_draft.get("description", ""),
+        "acceptance_criteria": requirement_draft.get("acceptance_criteria", []),
+        "analysis": requirement_draft,
+        "source_type": "manual",
     }
 
 
-def _extract_artifact_context(spec: dict, state: str) -> dict:
-    """Extract upstream artifacts relevant to the current state."""
-    artifacts = spec.get("artifacts", {}) or {}
-
-    # Per-state: which upstream agents' artifacts are relevant
+async def _extract_artifact_context(req_id: str, state: str) -> dict:
+    """Query agent_results table for upstream agent artifacts."""
     _STATE_UPSTREAM = {
         "analyzing": [],
+        "knowledge_analysis": ["A1"],
         "designing": ["A1", "A2"],
         "reviewing": ["A1", "A2", "A3", "A4"],
         "decomposing": ["A1", "A4", "A5"],
@@ -246,40 +243,46 @@ def _extract_artifact_context(spec: dict, state: str) -> dict:
     }
 
     relevant = _STATE_UPSTREAM.get(state, [])
+    if not relevant:
+        return {}
+
+    pool = await _get_pool()
     result = {}
     for agent_id in relevant:
-        if agent_id == "A4":
-            # A4 writes to spec.openapi / spec.erd (root keys) instead of
-            # spec.artifacts.A4 because it's in _AGENTS_THAT_PERSIST.
-            # Read from root keys and normalize into artifact_context.
-            a4_data = {}
-            openapi = spec.get("openapi", {})
-            erd = spec.get("erd", {})
-
-            if openapi:
-                api_schema = openapi.get("schema", openapi)
-                if isinstance(api_schema, dict):
-                    # Produce list of dicts (not strings) so _structured_extract
-                    # can safely call .get() on each item.
-                    paths = {}
-                    raw_paths = api_schema.get("paths", {})
-                    for path, methods in (raw_paths.items() if isinstance(raw_paths, dict) else []):
-                        paths[path] = list(methods.keys()) if isinstance(methods, dict) else []
-                    a4_data["openapi"] = {
-                        "paths": paths,
-                        "info": api_schema.get("info", {}),
-                        "has_schema": bool(raw_paths),
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT artifact FROM agent_results "
+                "WHERE req_id = $1::uuid AND agent_key = $2 "
+                "ORDER BY cycle DESC LIMIT 1",
+                req_id, agent_id,
+            )
+        if row:
+            artifact = _parse_json(row["artifact"])
+            if agent_id == "A4":
+                a4_data = {}
+                openapi = artifact.get("openapi", {})
+                erd = artifact.get("erd", {})
+                if openapi:
+                    api_schema = openapi.get("schema", openapi)
+                    if isinstance(api_schema, dict):
+                        paths = {}
+                        raw_paths = api_schema.get("paths", {})
+                        for path, methods in (raw_paths.items() if isinstance(raw_paths, dict) else []):
+                            paths[path] = list(methods.keys()) if isinstance(methods, dict) else []
+                        a4_data["openapi"] = {
+                            "paths": paths,
+                            "info": api_schema.get("info", {}),
+                            "has_schema": bool(raw_paths),
+                        }
+                if erd:
+                    a4_data["erd"] = {
+                        "tables": [e.get("name", "") for e in erd.get("entities", [])],
+                        "relationships": erd.get("relationships", []),
+                        "has_entities": bool(erd.get("entities", [])),
                     }
-            if erd:
-                a4_data["erd"] = {
-                    "tables": [e.get("name", "") for e in erd.get("entities", [])],
-                    "relationships": erd.get("relationships", []),
-                    "has_entities": bool(erd.get("entities", [])),
-                }
-
-            result[agent_id] = a4_data if a4_data else artifacts.get(agent_id, {})
-        elif agent_id in artifacts:
-            result[agent_id] = artifacts[agent_id]
+                result[agent_id] = a4_data if a4_data else artifact
+            else:
+                result[agent_id] = artifact
         else:
             result[agent_id] = {}
 
@@ -324,8 +327,8 @@ def _extract_environment_context() -> dict:
 
 # ── Decisions context ────────────────────────────────────────────────────
 
-async def _extract_decisions_context(req_id: str, state: str, conn) -> dict:
-    """Read Gate decisions from spec.decisions JSONB root key.
+async def _extract_decisions_context(req_id: str, state: str, requirement_draft: dict) -> dict:
+    """Read Gate decisions from requirement_draft.decisions key.
 
     For DEVELOPING state: includes Gate 1 architecture decisions.
     For TESTING/REVIEWING_CODE/RELEASING: includes all Gate decisions.
@@ -333,15 +336,8 @@ async def _extract_decisions_context(req_id: str, state: str, conn) -> dict:
     if state not in ("developing", "testing", "reviewing_code", "releasing"):
         return {}
 
-    row = await conn.fetchrow(
-        "SELECT COALESCE(spec->'decisions', '{}'::jsonb) AS decisions "
-        "FROM requirements WHERE id = $1::uuid",
-        req_id,
-    )
-    if not row:
-        return {"resolved": {}, "source_gates": []}
-
-    decisions_raw = row["decisions"]
+    # decisions are stored as a key inside requirement_draft JSONB
+    decisions_raw = requirement_draft.get("decisions", {}) if requirement_draft else {}
     if isinstance(decisions_raw, str):
         try:
             decisions_raw = json.loads(decisions_raw)
@@ -361,6 +357,7 @@ async def _extract_decisions_context(req_id: str, state: str, conn) -> dict:
 def _agent_for_state(state: str) -> str:
     return {
         "analyzing": "A1",
+        "knowledge_analysis": "A2",
         "designing": "A4",
         "reviewing": "A5",
         "decomposing": "A6",
@@ -399,22 +396,19 @@ async def build_context(
     pool = await _get_pool()
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
-            "SELECT id, title, description, spec, source_payload, source_type "
+            "SELECT id, title, requirement_draft "
             "FROM requirements WHERE id = $1::uuid",
             req_id,
         )
         if not row:
             return {"req_id": req_id, "state": state, "error": "Requirement not found"}
 
-        spec = _parse_json(row["spec"])
+        requirement_draft = _parse_json(row["requirement_draft"])
 
         # 1. Requirement context
-        requirement_context = _extract_requirement_context(row, spec)
+        requirement_context = _extract_requirement_context(row, requirement_draft)
 
-        # 2. Artifact context (from spec.artifacts JSONB)
-        artifact_context = _extract_artifact_context(spec, state)
-
-        # 3. Knowledge context
+        # 2. Knowledge context
         budget = _token_budget_for_state(state)
         knowledge_context = await _build_knowledge_section(
             target_agent=agent_id,
@@ -424,11 +418,14 @@ async def build_context(
             token_budget=budget,
         )
 
-        # 4. Environment context
+        # 3. Environment context
         environment_context = _extract_environment_context()
 
-        # 5. Decisions context (Gate approval decisions)
-        decisions_context = await _extract_decisions_context(req_id, state, conn)
+        # 4. Decisions context (Gate approval decisions)
+        decisions_context = await _extract_decisions_context(req_id, state, requirement_draft)
+
+    # 5. Artifact context (from agent_results table, separate query)
+    artifact_context = await _extract_artifact_context(req_id, state)
 
     # 6. Rework context (supplied by Workflow)
     rework = rework_context or {}
@@ -450,7 +447,7 @@ async def build_context(
 
         # Backward-compatible keys (existing agent code reads these)
         "title": requirement_context["title"],
-        "spec_sections": spec.get("spec_sections", spec.get("sections", [])),
+        "spec_sections": requirement_draft.get("spec_sections", requirement_draft.get("sections", [])),
         "openapi_hint": {
             "paths": (artifact_context.get("A4", {}).get("openapi", {}) or {}).get("paths", {}),
             "info": (artifact_context.get("A4", {}).get("openapi", {}) or {}).get("info", {}),

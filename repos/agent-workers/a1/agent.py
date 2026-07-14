@@ -68,6 +68,8 @@ class A1Agent:
             )
             accumulated_draft = current_draft or {}
 
+            self.draft_builder.set_req_id(req_id)
+
             async for partial in self.draft_builder.stream_analyze(user_message, ctx):
                 accumulated_draft = partial
                 yield {"type": "draft_update", "draft": partial}

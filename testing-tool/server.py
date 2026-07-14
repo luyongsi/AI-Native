@@ -230,6 +230,7 @@ async def api_dialogue_chat(req: dict):
     SSE_QUEUES[chat_id] = queue
 
     async def event_generator():
+        nonlocal full_session_id
         collected_events = []
         try:
             async for line in dialogue_chat(req_id, message, full_session_id):
@@ -240,7 +241,6 @@ async def api_dialogue_chat(req: dict):
                     evt = json.loads(data_str)
                     # Extract session_id from done/draft_update events
                     if evt.get("session_id"):
-                        nonlocal full_session_id
                         full_session_id = evt["session_id"]
                     collected_events.append(evt)
                 except json.JSONDecodeError:
@@ -484,17 +484,21 @@ async def run_e2e_pipeline(run_id: str, title: str, message: str, queue: asyncio
         return result
 
     # ── Step 4: Confirm dialogue ─────────────────────────────────
-    try:
-        await emit_step("confirm", "running", detail="Confirming analysis...")
-        cr = await _httpx_post("/api/dialogue/confirm", {"session_id": session_id})
-        await emit_step("confirm", "passed",
-                        cycle=cr.get("cycle", 0),
-                        status=cr.get("status"),
-                        detail=f"Cycle: {cr.get('cycle', 0)}")
-    except Exception as e:
-        await emit_step("confirm", "warning", error=str(e),
-                        detail="Confirm may have already been done")
-        # Non-fatal — continue
+    if not session_id:
+        await emit_step("confirm", "warning",
+                        detail="No session_id — confirm may have been done implicitly")
+    else:
+        try:
+            await emit_step("confirm", "running", detail="Confirming analysis...")
+            cr = await _httpx_post("/api/dialogue/confirm", {"session_id": session_id})
+            await emit_step("confirm", "passed",
+                            cycle=cr.get("cycle", 0),
+                            status=cr.get("status"),
+                            detail=f"Cycle: {cr.get('cycle', 0)}")
+        except Exception as e:
+            await emit_step("confirm", "warning", error=str(e),
+                            detail="Confirm may have already been done")
+            # Non-fatal — continue
 
     # ── Step 5: Trigger workflow ────────────────────────────────
     try:
