@@ -34,6 +34,7 @@ class OutboxPublisher:
         self.db_pool = db_pool
         self.nats_url = nats_url
         self._nats = None
+        self._js = None
         self._running = False
 
     async def start(self):
@@ -41,10 +42,12 @@ class OutboxPublisher:
         import nats
         try:
             self._nats = await nats.connect(self.nats_url)
+            self._js = self._nats.jetstream()
             logger.info("[outbox] Connected to NATS at %s", self.nats_url)
         except Exception as e:
             logger.error("[outbox] NATS connection failed: %s", e)
             self._nats = None
+            self._js = None
 
         self._running = True
         asyncio.create_task(self._poll_loop())
@@ -64,7 +67,7 @@ class OutboxPublisher:
             await asyncio.sleep(POLL_INTERVAL)
 
     async def _publish_pending(self):
-        if not self._nats:
+        if not self._nats or not self._js:
             return
 
         conn = await self.db_pool.acquire()
@@ -92,9 +95,10 @@ class OutboxPublisher:
 
         for attempt in range(1, MAX_RETRIES + 1):
             try:
-                await self._nats.publish(
+                await self._js.publish(
                     event_name,
                     json.dumps(payload, ensure_ascii=False).encode(),
+                    headers={"Nats-Msg-Id": f"outbox-{row['id']}"},
                 )
                 # Success — mark published
                 await conn.execute(

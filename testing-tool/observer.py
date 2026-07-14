@@ -190,9 +190,9 @@ class PipelineObserver:
                         pass
 
             await js.subscribe("context.ready.>", cb=on_context_ready,
-                               stream="AI_NATIVE_EVENTS")
+                               stream="AI_NATIVE_EVENTS", durable="observer_context_ready")
             await js.subscribe("agent.result.>", cb=on_agent_result,
-                               stream="AI_NATIVE_EVENTS")
+                               stream="AI_NATIVE_EVENTS", durable="observer_agent_result")
             logger.info("NATS listeners active on context.ready.> and agent.result.>")
             await self._stop.wait()
             await nc.close()

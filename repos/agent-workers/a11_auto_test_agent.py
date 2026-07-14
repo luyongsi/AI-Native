@@ -77,7 +77,8 @@ class A11AutoTestAgent(BaseAgentWorker):
 
         # Subscribe to augmentation events
         try:
-            await self.nc.subscribe("test.augment_request", cb=self._handle_augment_event)
+            await self.js.subscribe("test.augment_request", cb=self._handle_augment_event,
+                                    stream="AI_NATIVE_EVENTS", durable="A11_consumer_test_augment_request")
             logger.info(f"[A11] Subscribed to test.augment_request events")
         except Exception as e:
             logger.warning(f"[A11] Failed to subscribe to augment requests: {e}")
@@ -204,7 +205,7 @@ class A11AutoTestAgent(BaseAgentWorker):
         for result in batch_result["results"]:
             test_name = result.get("test_name", "unknown")
             passed = result.get("passed", False)
-            await self.nc.publish(
+            await self.js.publish(
                 f"{'test.completed' if passed else 'test.failed'}",
                 {
                     "event_type": "test.completed" if passed else "test.failed",
@@ -240,7 +241,8 @@ class A11AutoTestAgent(BaseAgentWorker):
             },
             "agent_id": AGENT_ID,
         }
-        await self.nc.publish("test.tdd_complete", json.dumps(tdd_complete_envelope, ensure_ascii=False).encode())
+        await self.js.publish("test.tdd_complete", json.dumps(tdd_complete_envelope, ensure_ascii=False).encode(),
+                              headers={"Nats-Msg-Id": f"tdd-complete-{req_id}"})
         logger.info(f"[A11] Published test.tdd_complete for req={req_id}")
 
         # Build final report artifact
@@ -529,7 +531,8 @@ class A11AutoTestAgent(BaseAgentWorker):
             },
             "agent_id": AGENT_ID,
         }
-        await self.nc.publish("test.augmented", json.dumps(event_envelope, ensure_ascii=False).encode())
+        await self.js.publish("test.augmented", json.dumps(event_envelope, ensure_ascii=False).encode(),
+                              headers={"Nats-Msg-Id": f"test-augmented-{req_id}"})
         logger.info(f"[A11] Published test.augmented: {len(augmented_tests)} tests for req={req_id}")
 
         return augmented_tests

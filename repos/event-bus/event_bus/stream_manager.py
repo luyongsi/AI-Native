@@ -52,6 +52,8 @@ DEFAULT_MAX_MSGS = 1_000_000
 DEFAULT_MAX_BYTES = 10 * 1024 * 1024 * 1024  # 10 GB
 DEFAULT_DUPLICATE_WINDOW = 120  # 2 minutes in seconds
 
+DEFAULT_MAX_AGE = 7 * 24 * 60 * 60 * 1_000_000_000  # 7 days in nanoseconds
+
 STREAM_CONFIG = StreamConfig(
     name=STREAM_NAME,
     subjects=STREAM_SUBJECTS,
@@ -59,6 +61,7 @@ STREAM_CONFIG = StreamConfig(
     max_consumers=-1,
     max_msgs=DEFAULT_MAX_MSGS,
     max_bytes=DEFAULT_MAX_BYTES,
+    max_age=DEFAULT_MAX_AGE,
     discard=DiscardPolicy.OLD,
     storage=StorageType.FILE,
     duplicate_window=DEFAULT_DUPLICATE_WINDOW,
@@ -152,7 +155,7 @@ class StreamManager:
         consumer_name: str,
         filter_subject: str,
         durable: bool = True,
-        deliver_policy: DeliverPolicy = DeliverPolicy.ALL,
+        deliver_policy: DeliverPolicy = DeliverPolicy.NEW,
         ack_wait: int = 30,
         max_deliver: int = -1,
         max_ack_pending: int = 1000,
@@ -191,3 +194,52 @@ class StreamManager:
         js = await self.connect()
         await js.purge_stream(STREAM_NAME)
         logger.info("Stream %s purged", STREAM_NAME)
+
+    # ------------------------------------------------------------------
+    # Orphaned consumer cleanup
+    # ------------------------------------------------------------------
+
+    async def cleanup_orphaned_consumers(
+        self,
+        active_names: set[str],
+        max_idle_hours: int = 1,
+    ) -> int:
+        """Delete durable consumers not in *active_names* that have been idle.
+
+        Idle is defined as: num_ack_pending == 0, num_pending == 0, and
+        created more than *max_idle_hours* ago.
+
+        Returns the number of consumers deleted.
+        """
+        js = await self.connect()
+        try:
+            consumers = await js.consumers_info(STREAM_NAME)
+        except Exception:
+            logger.warning("cleanup_orphaned: cannot list consumers for stream %s", STREAM_NAME)
+            return 0
+
+        from datetime import datetime, timezone, timedelta
+
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=max_idle_hours)
+        deleted = 0
+
+        for c in consumers:
+            name = c.name
+            if name in active_names:
+                continue
+            if c.num_ack_pending > 0 or c.num_pending > 0:
+                continue
+            created = c.created
+            if created is not None and created > cutoff:
+                continue
+
+            try:
+                await js.delete_consumer(stream=STREAM_NAME, consumer=name)
+                logger.info("cleanup_orphaned: deleted consumer %s (created=%s)", name, created)
+                deleted += 1
+            except Exception:
+                logger.warning("cleanup_orphaned: failed to delete consumer %s", name)
+
+        if deleted:
+            logger.info("cleanup_orphaned: deleted %d orphaned consumers", deleted)
+        return deleted

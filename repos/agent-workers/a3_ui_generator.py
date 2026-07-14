@@ -141,7 +141,9 @@ class UIGeneratorAgent(BaseAgentWorker):
             "screens": screens,
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
-        await self.nc.publish(f"prototype.generated.{req_id}", json.dumps(payload, ensure_ascii=False).encode())
+        msg_id = f"prototype-generated-{req_id}"
+        await self.js.publish(f"prototype.generated.{req_id}", json.dumps(payload, ensure_ascii=False).encode(),
+                              headers={"Nats-Msg-Id": msg_id})
         logger.info(f"[A3] Published prototype.generated for req={req_id}")
 
     async def init(self):
@@ -150,8 +152,9 @@ class UIGeneratorAgent(BaseAgentWorker):
 
         # Subscribe to annotation events
         try:
-            if self.nc:
-                await self.nc.subscribe("prototype.annotated.*", cb=self._on_annotation_event)
+            if self.js:
+                await self.js.subscribe("prototype.annotated.*", cb=self._on_annotation_event,
+                                        stream="AI_NATIVE_EVENTS", durable="A3_consumer_prototype_annotated")
                 logger.info("[A3] Subscribed to prototype.annotated.* events")
         except Exception as e:
             logger.warning(f"[A3] Failed to subscribe to annotation events: {e}")

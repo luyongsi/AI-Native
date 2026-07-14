@@ -59,7 +59,9 @@ async def start_nats():
     global NATS_CLIENT
     try:
         NATS_CLIENT = await nats.connect(NATS_URL)
-        await NATS_CLIENT.subscribe("agent.status.changed", cb=ws_nats_handler)
+        js = NATS_CLIENT.jetstream()
+        await js.subscribe("agent.status.changed", cb=ws_nats_handler,
+                           stream="AI_NATIVE_EVENTS", durable="mc_backend_agent_status")
         print(f"[NATS] Connected to {NATS_URL}, subscribed to agent.status.changed")
     except Exception as e:
         print(f"[NATS] Connection failed: {e}")
@@ -153,12 +155,28 @@ async def lifespan(app: FastAPI):
     )
     logger.info("[NATS] context.ready.A1 subscriber started")
 
+    # Start NATS subscriber for context.ready.gate0 (pre-create approval record)
+    from services.nats_subscriber import subscribe_context_ready_gate0
+    _nats_gate0_task = asyncio.create_task(
+        subscribe_context_ready_gate0(DB_POOL, NATS_URL),
+    )
+    logger.info("[NATS] context.ready.gate0 subscriber started")
+
+    # Start NATS subscriber for context.ready.gate1 (pre-create Gate1 approval record)
+    from services.nats_subscriber import subscribe_context_ready_gate1
+    _nats_gate1_task = asyncio.create_task(
+        subscribe_context_ready_gate1(DB_POOL, NATS_URL),
+    )
+    logger.info("[NATS] context.ready.gate1 subscriber started")
+
     # Start background metrics collector
     bg_task = asyncio.create_task(metrics_collector_loop())
     yield
     # Shutdown
     bg_task.cancel()
     _nats_sub_task.cancel()
+    _nats_gate0_task.cancel()
+    _nats_gate1_task.cancel()
     await _outbox_publisher.stop()
     if REDIS_CLIENT:
         await REDIS_CLIENT.close()
@@ -203,12 +221,15 @@ from api.dialogue import router as dialogue_router
 from api.dialogue import _requirements_status_router
 from api.agents import router as agents_router
 from api.approvals import router as approvals_router
+from api.agent_results import router as agent_results_router
 from api.tests import router as tests_router
 from api.insights import router as insights_router
 from api.activity_stream import router as activity_stream_router
 from api.prototypes import router as prototypes_router
+from api.prototype import router as prototype_router
 from ws.ws_gateway import router as ws_router
 from api.workflow import router as workflow_router
+from api.llm_calls import router as llm_calls_router
 
 app.include_router(dashboard_router)
 app.include_router(requirements_router)
@@ -216,12 +237,15 @@ app.include_router(dialogue_router)
 app.include_router(_requirements_status_router)
 app.include_router(agents_router)
 app.include_router(approvals_router)
+app.include_router(agent_results_router)
 app.include_router(tests_router)
 app.include_router(insights_router)
 app.include_router(activity_stream_router)
 app.include_router(prototypes_router)
+app.include_router(prototype_router)
 app.include_router(ws_router)
 app.include_router(workflow_router)
+app.include_router(llm_calls_router)
 
 # Optional Phase 4 + Phase 5 routers (knowledge graph, topology, etc.)
 optional_routers = {

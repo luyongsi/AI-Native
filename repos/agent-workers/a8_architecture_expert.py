@@ -106,7 +106,8 @@ class ArchitectureExpertAgent(BaseAgentWorker):
             "req_id": req_id,
             "agent_id": AGENT_ID,
         }
-        await self.nc.publish("review.completed", json.dumps(envelope, ensure_ascii=False).encode())
+        await self.js.publish("review.completed", json.dumps(envelope, ensure_ascii=False).encode(),
+                              headers={"Nats-Msg-Id": f"review-completed-{req_id}"})
         logger.info(f"[A8] Published review.completed verdict={verdict} score={score}")
 
         await self.report_status(req_id, "completed",

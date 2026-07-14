@@ -30,7 +30,7 @@ class CodeReviewAgent(BaseAgentWorker):
 
     async def init(self):
         await super().init()
-        sub = await self.nc.subscribe("test.passed")
+        sub = await self.js.subscribe("test.passed", stream="AI_NATIVE_EVENTS", durable="A12_consumer_test_passed")
         logger.info(f"[A12] Subscribed to 'test.passed' events")
         asyncio.create_task(self._consume_test_passed(sub))
 
@@ -153,7 +153,8 @@ class CodeReviewAgent(BaseAgentWorker):
             "req_id": req_id,
             "agent_id": AGENT_ID,
         }
-        await self.nc.publish("review.completed", json.dumps(envelope, ensure_ascii=False).encode())
+        await self.js.publish("review.completed", json.dumps(envelope, ensure_ascii=False).encode(),
+                              headers={"Nats-Msg-Id": f"review-completed-{req_id}"})
         logger.info(f"[A12] Published review.completed verdict={verdict} score={score}")
 
         return summary

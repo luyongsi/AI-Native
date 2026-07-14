@@ -100,7 +100,8 @@ async def publish_msg_received(chat_id: str, sender_id: str, text: str, raw_even
         "raw": raw_event,
     }
     body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-    await nc.publish(subject, body)
+    js = nc.jetstream()
+    await js.publish(subject, body, headers={"Nats-Msg-Id": f"msg-{msg_id}"})
     logger.info(f"Published msg_received: chat_id={chat_id}, text={text[:80]}...")
 
 

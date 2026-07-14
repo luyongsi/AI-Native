@@ -88,8 +88,10 @@ async def notify_mc(
 
     try:
         nc = await _get_nats()
+        js = nc.jetstream()
         subject = f"orchestrator.state.{req_id}"
-        await nc.publish(subject, json.dumps(envelope, ensure_ascii=False).encode())
+        await js.publish(subject, json.dumps(envelope, ensure_ascii=False).encode(),
+                         headers={"Nats-Msg-Id": envelope["event_id"]})
         # Also publish to agent.status.changed for MC live view
         status_envelope = {
             "agent_id": "orchestrator",
@@ -98,7 +100,8 @@ async def notify_mc(
             "message": f"State: {old_state} -> {new_state}",
             "timestamp": now_ts,
         }
-        await nc.publish("agent.status.changed", json.dumps(status_envelope, ensure_ascii=False).encode())
+        await js.publish("agent.status.changed", json.dumps(status_envelope, ensure_ascii=False).encode(),
+                         headers={"Nats-Msg-Id": f"state-change-{req_id}-{new_state}"})
         result["note"] = f"Published to NATS subject '{subject}'"
         activity.logger.info("notify_mc: published %s -> %s for req=%s", old_state, new_state, req_id)
     except Exception as e:

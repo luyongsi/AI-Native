@@ -75,7 +75,8 @@ class ActivityRecorder:
         subject = f"agent.{self.agent_id}.progress"
         body = json.dumps(event_data, ensure_ascii=False).encode("utf-8")
 
-        ack = await self.js.publish(subject, body)
+        ack = await self.js.publish(subject, body,
+                                     headers={"Nats-Msg-Id": f"progress-{self.agent_id}-{req_id}-{step}"})
         logger.debug(
             f"[{self.agent_id}] Progress recorded: req={req_id}, step={step}, seq={ack.seq}"
         )
@@ -114,7 +115,8 @@ class ActivityRecorder:
         subject = f"agent.{self.agent_id}.status"
         body = json.dumps(event_data, ensure_ascii=False).encode("utf-8")
 
-        ack = await self.js.publish(subject, body)
+        ack = await self.js.publish(subject, body,
+                                     headers={"Nats-Msg-Id": f"status-{self.agent_id}-{req_id}-{status}"})
         logger.debug(
             f"[{self.agent_id}] Status recorded: req={req_id}, status={status}, seq={ack.seq}"
         )
@@ -153,7 +155,8 @@ class ActivityRecorder:
         subject = f"agent.{self.agent_id}.artifact"
         body = json.dumps(event_data, ensure_ascii=False).encode("utf-8")
 
-        ack = await self.js.publish(subject, body)
+        ack = await self.js.publish(subject, body,
+                                     headers={"Nats-Msg-Id": f"artifact-{self.agent_id}-{req_id}-{artifact_type}"})
         logger.debug(
             f"[{self.agent_id}] Artifact recorded: req={req_id}, type={artifact_type}, seq={ack.seq}"
         )

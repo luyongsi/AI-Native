@@ -372,7 +372,9 @@ class A6Architect:
             # Publish to NATS
             subject = "architecture.dag_built"
             message = json.dumps(event, default=str).encode()
-            await self.nats_client.publish(subject, message)
+            js = self.nats_client.jetstream()
+            await js.publish(subject, message,
+                             headers={"Nats-Msg-Id": f"dag-built-{req_id}"})
 
             logger.info(
                 "[A6] Published event to %s for req_id=%s, dag_id=%d",

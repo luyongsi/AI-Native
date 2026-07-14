@@ -118,7 +118,7 @@ async def dispatch_agent(
     # Extract requirement fields for Agent direct access
     req_ctx = ctx_meta.get("requirement_context", {})
     envelope = {
-        "event_id": f"dispatch-{req_id}-{state}-{agent_id}-{int(datetime.now(timezone.utc).timestamp() * 1000)}",
+        "event_id": f"dispatch-{req_id}-{state}-{agent_id}",
         "event_type": event_type,
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "payload": {
@@ -146,9 +146,11 @@ async def dispatch_agent(
 
     try:
         nc = await _get_nats()
-        await nc.publish(
+        js = nc.jetstream()
+        await js.publish(
             event_type,
             json.dumps(envelope, ensure_ascii=False).encode(),
+            headers={"Nats-Msg-Id": envelope["event_id"]},
         )
         result["note"] = f"Published to NATS subject '{event_type}'"
         result["nats_subject"] = event_type

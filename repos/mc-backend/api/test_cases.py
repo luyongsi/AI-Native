@@ -401,7 +401,8 @@ async def validate_test_case(
                     "case_id": case_id,
                     "timestamp": datetime.utcnow().isoformat(),
                 }
-                await nc.publish(f"test.validate", json.dumps(event_data).encode())
+                await nc.publish(f"test.validate", json.dumps(event_data).encode(),
+                                 headers={"Nats-Msg-Id": f"test-validate-{req_id}-{case_id}"})
                 logger.info(f"[A7] Validation event published: req_id={req_id}, case_id={case_id}")
             except Exception as e:
                 logger.error(f"[A7] Failed to publish validation event: {e}")
@@ -465,7 +466,8 @@ async def augment_test_cases(
                     "existing_tests": len(existing_tests),
                     "timestamp": datetime.utcnow().isoformat(),
                 }
-                await nc.publish(f"test.augment_request", json.dumps(event_data).encode())
+                await nc.publish(f"test.augment_request", json.dumps(event_data).encode(),
+                                 headers={"Nats-Msg-Id": f"test-augment-{req_id}"})
                 logger.info(f"[A11] Augmentation event published: req_id={req_id}")
             except Exception as e:
                 logger.error(f"[A11] Failed to publish augmentation event: {e}")

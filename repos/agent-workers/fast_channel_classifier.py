@@ -110,7 +110,8 @@ class FastChannelClassifier(BaseAgentWorker):
             "req_id": req_id,
             "agent_id": self.agent_id,
         }
-        await self.nc.publish("channel.routing.decided", json.dumps(routing_event, ensure_ascii=False).encode())
+        await self.js.publish("channel.routing.decided", json.dumps(routing_event, ensure_ascii=False).encode(),
+                              headers={"Nats-Msg-Id": f"channel-routing-{req_id}"})
         logger.info(f"[FC] Published channel.routing.decided: {result['channel']} (score={weighted})")
 
         return result

@@ -285,8 +285,8 @@ class BaseAgentWorker:
 
         When a message arrives on the subscribed subject, parse it as a dispatch
         envelope, call self.execute(), and publish results back.
-        Ack is sent BEFORE execute() to prevent JetStream redelivery.
-        Dedup via event_id set (5-minute rolling window).
+        Ack is sent AFTER execute() completes successfully; nak on failure.
+        Dedup via event_id set (5-minute rolling window) + JetStream Nats-Msg-Id.
         """
         import time as _time
 
@@ -356,20 +356,26 @@ class BaseAgentWorker:
                 try:
                     wf_id = context.get("workflow_id", "")
                     reply_subject = f"agent.result.{self.agent_id}"
-                    await self.nc.publish(reply_subject, json.dumps({
+                    result_msg_id = f"agent-result-{event_id}" if event_id else str(uuid.uuid4())
+                    await self.js.publish(reply_subject, json.dumps({
                         "agent_id": self.agent_id,
                         "req_id": req_id,
                         "workflow_id": wf_id,
                         "result": result or {},
                         "timestamp": datetime.now(timezone.utc).isoformat(),
-                    }, ensure_ascii=False, default=str).encode())
+                    }, ensure_ascii=False, default=str).encode(),
+                        headers={"Nats-Msg-Id": result_msg_id},
+                    )
                     logger.info(f"[{self.agent_id}] Published result to '{reply_subject}'")
                 except Exception as pub_err:
                     logger.error(f"[{self.agent_id}] Failed to publish agent.result: {pub_err}")
+
+                await msg.ack()
+
             except Exception as e:
                 logger.error(f"[{self.agent_id}] Error handling NATS message: {e}", exc_info=True)
                 try:
-                    await msg.ack()
+                    await msg.nak()
                 except Exception:
                     pass
 
@@ -378,7 +384,7 @@ class BaseAgentWorker:
             subjects.extend(extra_subjects)
         import time as _time
         for subj in subjects:
-            consumer_name = f"{self.agent_id}_consumer_{subj.replace('.','_')}_{int(_time.time())}"
+            consumer_name = f"{self.agent_id}_consumer_{subj.replace('.', '_')}"
             try:
                 await self.js.subscribe(subj, cb=_handle, stream="AI_NATIVE_EVENTS", durable=consumer_name)
             except Exception:
@@ -387,7 +393,7 @@ class BaseAgentWorker:
             logger.info(f"[{self.agent_id}] Subscribed to NATS subject: {subj}")
 
     async def report_status(self, req_id: str, status: str, detail: str):
-        """发布 agent.status.changed 事件到 NATS（容错：失败不抛异常）"""
+        """发布 agent.status.changed 事件到 NATS JetStream（容错：失败不抛异常）"""
         try:
             payload = StatusDetail(
                 agent_id=self.agent_id,
@@ -397,13 +403,15 @@ class BaseAgentWorker:
                 timestamp=datetime.now(timezone.utc).isoformat()
             )
             subject = f"agent.status.changed.{self.agent_id}"
-            await self.nc.publish(subject, payload.model_dump_json().encode())
+            msg_id = f"status-{self.agent_id}-{req_id}-{status}-{int(_time_module.time())}"
+            await self.js.publish(subject, payload.model_dump_json().encode(),
+                                  headers={"Nats-Msg-Id": msg_id})
             logger.info(f"[{self.agent_id}] Status -> {status}: {detail}")
         except Exception as e:
             logger.warning(f"[{self.agent_id}] report_status failed (non-fatal): {e}")
 
     async def report_artifact(self, req_id: str, artifact_type: str, data: dict):
-        """发布 artifact.produced 事件到 NATS（容错：失败不抛异常）"""
+        """发布 artifact.produced 事件到 NATS JetStream（容错：失败不抛异常）"""
         try:
             payload = ArtifactRecord(
                 agent_id=self.agent_id,
@@ -413,7 +421,9 @@ class BaseAgentWorker:
                 timestamp=datetime.now(timezone.utc).isoformat()
             )
             subject = f"artifact.produced.{self.agent_id}"
-            await self.nc.publish(subject, payload.model_dump_json().encode())
+            msg_id = f"artifact-{self.agent_id}-{req_id}-{artifact_type}-{int(_time_module.time())}"
+            await self.js.publish(subject, payload.model_dump_json().encode(),
+                                  headers={"Nats-Msg-Id": msg_id})
             logger.info(f"[{self.agent_id}] Artifact produced: {artifact_type}")
         except Exception as e:
             logger.warning(f"[{self.agent_id}] report_artifact failed (non-fatal): {e}")

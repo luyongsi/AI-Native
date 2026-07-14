@@ -474,7 +474,7 @@ class A9DevAgent(BaseAgentWorker):
         collected.append(amb)
 
         # Publish to NATS for spec quality improvement
-        asyncio.create_task(self.nc.publish("spec.feedback", json.dumps({
+        asyncio.create_task(self.js.publish("spec.feedback", json.dumps({
             "req_id": req_id, "agent_id": "A9",
             "type": "ambiguity",
             "field": amb.get("field", ""),
@@ -490,7 +490,7 @@ class A9DevAgent(BaseAgentWorker):
             f"阻塞性问题: {issues[0].get('summary', 'unknown')}")
 
         try:
-            await self.nc.publish("agent.escalated", json.dumps({
+            await self.js.publish("agent.escalated", json.dumps({
                 "event_id": f"escalate-a9-{req_id}",
                 "req_id": req_id,
                 "agent_id": "A9",

@@ -1,14 +1,11 @@
 """
-MC Backend — NATS subscriber for context.ready.A1 (Gate0 rejection).
+MC Backend — NATS subscriber for context.ready.A1 (Gate0 rejection) and
+context.ready.gate0 (Gate0 approval creation).
 
-Handles the case where Gate0 rejects a requirement:
-  1. Updates dialogue_sessions status to 'reopened'
-  2. Injects a system message with rejection details
-  3. Writes event_log audit record
-  4. Notifies frontend via WebSocket (best-effort, through Redis Pub/Sub)
-
-Design: A1's context.ready.A1 is "session reopened, waiting for user to revise"
-(not "start working now" like A2-A12 dispatched agents).
+Design:
+  - context.ready.A1: Gate0 rejected → reopen session, inject system message
+  - context.ready.gate0: Orchestrator reached Gate0 → pre-create approval record
+  - context.ready.gate1: Orchestrator reached Gate1 → pre-create approval record
 """
 from __future__ import annotations
 
@@ -20,6 +17,50 @@ import nats
 logger = logging.getLogger(__name__)
 
 
+async def subscribe_context_ready_gate0(db_pool, nats_url: str):
+    """Subscribe to context.ready.gate0 — pre-create approval record on arrival."""
+    while True:
+        try:
+            nc = await nats.connect(nats_url)
+            js = nc.jetstream()
+            await js.subscribe("context.ready.gate0", cb=_make_gate0_handler(db_pool),
+                               stream="AI_NATIVE_EVENTS", durable="mc_backend_gate0")
+            logger.info("[nats-sub] Subscribed to context.ready.gate0")
+            try:
+                while nc.is_connected:
+                    await __import__("asyncio").sleep(60)
+            except Exception:
+                pass
+            finally:
+                if nc.is_connected:
+                    await nc.drain()
+        except Exception as e:
+            logger.error("[nats-sub] context.ready.gate0 connection error: %s — retrying in 5s", e)
+            await __import__("asyncio").sleep(5)
+
+
+async def subscribe_context_ready_gate1(db_pool, nats_url: str):
+    """Subscribe to context.ready.gate1 — pre-create Gate1 approval record."""
+    while True:
+        try:
+            nc = await nats.connect(nats_url)
+            js = nc.jetstream()
+            await js.subscribe("context.ready.gate1", cb=_make_gate_handler(db_pool, gate_level=1),
+                               stream="AI_NATIVE_EVENTS", durable="mc_backend_gate1")
+            logger.info("[nats-sub] Subscribed to context.ready.gate1")
+            try:
+                while nc.is_connected:
+                    await __import__("asyncio").sleep(60)
+            except Exception:
+                pass
+            finally:
+                if nc.is_connected:
+                    await nc.drain()
+        except Exception as e:
+            logger.error("[nats-sub] context.ready.gate1 connection error: %s — retrying in 5s", e)
+            await __import__("asyncio").sleep(5)
+
+
 async def subscribe_context_ready_a1(db_pool, nats_url: str):
     """Start a background asyncio task that subscribes to context.ready.A1.
 
@@ -29,9 +70,9 @@ async def subscribe_context_ready_a1(db_pool, nats_url: str):
         try:
             nc = await nats.connect(nats_url)
             js = nc.jetstream()
-            await js.subscribe("context.ready.A1", cb=_make_handler(db_pool))
+            await js.subscribe("context.ready.A1", cb=_make_handler(db_pool),
+                               stream="AI_NATIVE_EVENTS", durable="mc_backend_a1")
             logger.info("[nats-sub] Subscribed to context.ready.A1")
-            # Keep the subscription alive
             try:
                 while nc.is_connected:
                     await __import__("asyncio").sleep(60)
@@ -43,6 +84,141 @@ async def subscribe_context_ready_a1(db_pool, nats_url: str):
         except Exception as e:
             logger.error("[nats-sub] Connection error: %s — retrying in 5s", e)
             await __import__("asyncio").sleep(5)
+
+
+# ── context.ready.gate0 handler ───────────────────────────────────────────
+
+
+def _make_gate0_handler(db_pool):
+    async def handle(msg):
+        payload = json.loads(msg.data.decode())
+        req_id = payload.get("req_id")
+        session_id = payload.get("session_id", "")
+        cycle = payload.get("cycle", 0)
+
+        if not req_id:
+            logger.warning("[nats-sub] context.ready.gate0 missing req_id")
+            await msg.ack()
+            return
+
+        conn = await db_pool.acquire()
+        try:
+            # Idempotent pre-create
+            existing = await conn.fetchrow(
+                """SELECT id FROM approvals
+                   WHERE req_id = $1::uuid AND gate_level = 0 AND cycle = $2 AND status = 'pending'""",
+                req_id, cycle,
+            )
+
+            if not existing:
+                import datetime
+                now = datetime.datetime.now(datetime.timezone.utc)
+                await conn.execute(
+                    """INSERT INTO approvals (req_id, session_id, gate_level, cycle, status, created_at)
+                       VALUES ($1::uuid, $2::uuid, 0, $3, 'pending', $4)""",
+                    req_id, session_id or None, cycle, now,
+                )
+                logger.info("[nats-sub] Pre-created Gate0 approval for req=%s cycle=%d", req_id, cycle)
+
+                # Audit
+                await conn.execute(
+                    """INSERT INTO event_log
+                       (req_id, session_id, cycle, event_name, direction, payload)
+                       VALUES ($1::uuid, $2::uuid, $3, 'context.ready.gate0', 'IN', $4::jsonb)""",
+                    req_id, session_id or None, cycle,
+                    json.dumps(payload, ensure_ascii=False),
+                )
+
+                # WebSocket notify (best-effort)
+                try:
+                    from ws.ws_gateway import notify_session
+                    await notify_session(session_id, {
+                        "type": "gate0_ready",
+                        "req_id": req_id,
+                        "session_id": session_id,
+                        "cycle": cycle,
+                    })
+                except Exception:
+                    logger.debug("[nats-sub] WebSocket notify skipped for gate0")
+            else:
+                logger.debug("[nats-sub] Gate0 approval already exists for req=%s cycle=%d", req_id, cycle)
+
+        except Exception as e:
+            logger.exception("[nats-sub] Failed to handle context.ready.gate0: %s", e)
+        finally:
+            await conn.close()
+
+        await msg.ack()
+
+    return handle
+
+
+# ── Generic gate handler (for Gate1, Gate2, Gate3) ──────────────────────────
+
+
+def _make_gate_handler(db_pool, gate_level: int):
+    async def handle(msg):
+        payload = json.loads(msg.data.decode())
+        req_id = payload.get("req_id")
+        session_id = payload.get("session_id", "")
+        cycle = payload.get("cycle", 0)
+
+        if not req_id:
+            logger.warning("[nats-sub] context.ready.gate%d missing req_id", gate_level)
+            await msg.ack()
+            return
+
+        conn = await db_pool.acquire()
+        try:
+            existing = await conn.fetchrow(
+                """SELECT id FROM approvals
+                   WHERE req_id = $1::uuid AND gate_level = $2 AND cycle = $3 AND status = 'pending'""",
+                req_id, gate_level, cycle,
+            )
+
+            if not existing:
+                import datetime
+                now = datetime.datetime.now(datetime.timezone.utc)
+                await conn.execute(
+                    """INSERT INTO approvals (req_id, session_id, gate_level, cycle, status, created_at)
+                       VALUES ($1::uuid, $2::uuid, $3, $4, 'pending', $5)""",
+                    req_id, session_id or None, gate_level, cycle, now,
+                )
+                logger.info("[nats-sub] Pre-created Gate%d approval for req=%s cycle=%d", gate_level, req_id, cycle)
+
+                await conn.execute(
+                    """INSERT INTO event_log
+                       (req_id, session_id, cycle, event_name, direction, payload)
+                       VALUES ($1::uuid, $2::uuid, $3, $4, 'IN', $5::jsonb)""",
+                    req_id, session_id or None, cycle,
+                    f"context.ready.gate{gate_level}",
+                    json.dumps(payload, ensure_ascii=False),
+                )
+
+                try:
+                    from ws.ws_gateway import notify_session
+                    await notify_session(session_id, {
+                        "type": f"gate{gate_level}_ready",
+                        "req_id": req_id,
+                        "session_id": session_id,
+                        "cycle": cycle,
+                    })
+                except Exception:
+                    logger.debug("[nats-sub] WebSocket notify skipped for gate%d", gate_level)
+            else:
+                logger.debug("[nats-sub] Gate%d approval already exists for req=%s cycle=%d", gate_level, req_id, cycle)
+
+        except Exception as e:
+            logger.exception("[nats-sub] Failed to handle context.ready.gate%d: %s", gate_level, e)
+        finally:
+            await conn.close()
+
+        await msg.ack()
+
+    return handle
+
+
+# ── context.ready.A1 handler (Gate0 rejection → reopen session) ────────────
 
 
 def _make_handler(db_pool):
@@ -69,7 +245,7 @@ def _make_handler(db_pool):
                     session_id, req_id,
                 )
 
-                # 2. Inject system message (old cycle = gate rejection happened in that cycle)
+                # 2. Inject system message
                 seq_raw = await conn.fetchval(
                     "SELECT COALESCE(MAX(sequence_number), 0) + 1 "
                     "FROM dialogue_messages WHERE session_id = $1::uuid AND cycle = $2",

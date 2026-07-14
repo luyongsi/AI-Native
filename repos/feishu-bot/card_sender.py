@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import sys
+import time
 from datetime import datetime, timezone
 from typing import List, Optional
 
@@ -132,9 +133,11 @@ async def send_choice_card(chat_id: str, question: str, options: List[str]) -> d
             "card": card,
         },
     }
-    await nc.publish(
+    js = nc.jetstream()
+    await js.publish(
         "bot.message.sent",
         json.dumps(event_payload, ensure_ascii=False).encode("utf-8"),
+        headers={"Nats-Msg-Id": f"bot-msg-{chat_id}-{int(time.time())}"},
     )
     logger.info(f"Published bot.message.sent for chat_id={chat_id}")
 
@@ -166,9 +169,11 @@ async def send_text_message(chat_id: str, text: str) -> dict:
             "text": text,
         },
     }
-    await nc.publish(
+    js = nc.jetstream()
+    await js.publish(
         "bot.message.sent",
         json.dumps(event_payload, ensure_ascii=False).encode("utf-8"),
+        headers={"Nats-Msg-Id": f"bot-msg-text-{chat_id}-{int(time.time())}"},
     )
     logger.info(f"Published bot.message.sent for chat_id={chat_id}")
 

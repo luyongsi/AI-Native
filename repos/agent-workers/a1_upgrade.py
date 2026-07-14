@@ -203,9 +203,10 @@ class A1RequirementIntake:
             "req_id": req_id,
             "payload": draft,
         }
-        await self.nc.publish(
+        await self.js.publish(
             "requirement.drafted",
             json.dumps(event, ensure_ascii=False).encode("utf-8"),
+            headers={"Nats-Msg-Id": f"requirement-drafted-{req_id}"},
         )
         logger.info("[A1] Published requirement.drafted for req_id=%s", req_id)
 
@@ -221,7 +222,8 @@ class A1RequirementIntake:
             "message": detail,
         }
         payload = json.dumps(event, ensure_ascii=False).encode("utf-8")
-        await self.nc.publish(f"agent.status.changed.{self.agent_id}", payload)
+        await self.js.publish(f"agent.status.changed.{self.agent_id}", payload,
+                              headers={"Nats-Msg-Id": f"status-{self.agent_id}-{req_id}-{status}"})
         logger.info("[A1] Status -> %s: %s", status, detail)
 
     # ------------------------------------------------------------------
@@ -236,7 +238,8 @@ class A1RequirementIntake:
         self._running = True
 
         # 订阅 msg_received
-        sub = await self.nc.subscribe("msg_received", cb=self.on_msg_received)
+        sub = await self.js.subscribe("msg_received", cb=self.on_msg_received,
+                                       stream="AI_NATIVE_EVENTS", durable="A1_upgrade_consumer_msg_received")
         logger.info("[A1] Subscribed to msg_received. Waiting for messages...")
 
         try:

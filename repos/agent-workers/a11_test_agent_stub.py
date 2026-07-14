@@ -56,7 +56,8 @@ class A11TestAgentStub(BaseAgentWorker):
             "req_id": req_id,
             "agent_id": self.agent_id,
         }
-        await self.nc.publish(event_type, json.dumps(envelope, ensure_ascii=False).encode())
+        await self.js.publish(event_type, json.dumps(envelope, ensure_ascii=False).encode(),
+                              headers={"Nats-Msg-Id": f"test-result-{req_id}"})
         logger.info(f"[A11] Published {event_type} passed={passed}")
 
         return {"status": "completed", "total": report["total"], "passed": report["passed"],

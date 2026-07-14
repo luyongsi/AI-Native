@@ -509,6 +509,7 @@ def _extract_spec_from_reply(full_reply: str, spec_raw: dict, conn, req_id: str)
                 try:
                     import nats
                     nc = await nats.connect("nats://localhost:4222")
+                    js = nc.jetstream()
                     envelope = {
                         "event_id": f"spec-ready-{req_id}",
                         "event_type": "spec.ready.designing",
@@ -516,7 +517,8 @@ def _extract_spec_from_reply(full_reply: str, spec_raw: dict, conn, req_id: str)
                         "payload": {"req_id": req_id, "status": "designing", "section_count": len(_current)},
                         "req_id": req_id,
                     }
-                    await nc.publish("spec.ready.designing", json.dumps(envelope, ensure_ascii=False).encode())
+                    await js.publish("spec.ready.designing", json.dumps(envelope, ensure_ascii=False).encode(),
+                                     headers={"Nats-Msg-Id": f"spec-ready-{req_id}"})
                     await nc.close()
                     logger.info(f"[chat_spec] Published spec.ready.designing for req={req_id}")
                 except Exception as e:

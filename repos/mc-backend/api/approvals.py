@@ -1,27 +1,31 @@
 """
-Mission Control Backend - Approvals API (Phase 5.2: Complete Gate 0-3 + SLA)
-GET  /api/approvals                  - List approvals, filter by gate/status
-POST /api/approvals                  - Create approval record (human or agent-auto)
-POST /api/approvals/{id}/approve    - Approve a gate approval
-POST /api/approvals/{id}/reject     - Reject a gate approval
+Mission Control Backend — Approvals API (Gate 0-3)
 
-Orchestrator Refactor: Gate approval now signals Temporal Workflow directly.
-Agent dispatch is handled by the Workflow, not by this API.
+Aligned with data dictionary §6 and migration 008 (new approvals table).
+
+Endpoints:
+  GET  /api/approvals                  - List approvals
+  POST /api/approvals                  - Pre-create approval record
+  GET  /api/approvals/{id}/context     - Gate0 approval context (A1+A2 outputs)
+  POST /api/approvals/{id}/decide      - Submit pass/reject decision
 """
-from fastapi import APIRouter, HTTPException, Query
-from pydantic import BaseModel
-from typing import Optional, List
-from datetime import datetime, timezone, timedelta
+from __future__ import annotations
+
+import json
 import logging
+from datetime import datetime, timezone, timedelta
+from typing import Optional
+
+from fastapi import APIRouter, HTTPException, Query
+from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/approvals", tags=["approvals"])
 
-# Gate SLA in hours (per design doc 3.0)
-GATE_SLA_HOURS = {0: 48, 1: 24, 2: 12, 3: 4}
+# Gate SLA in hours (per design doc §7): Gate0=1h
+GATE_SLA_HOURS = {0: 1, 1: 24, 2: 12, 3: 4}
 
-# Gate metadata for frontend differentiation
 GATE_META = {
     0: {"label": "业务确认", "icon": "clipboard", "description": "A1+A2 分析完成后，业务方确认需求理解正确"},
     1: {"label": "Spec 确认", "icon": "file-text", "description": "A4 生成 Spec/OpenAPI/ERD 后确认设计方案"},
@@ -29,12 +33,48 @@ GATE_META = {
     3: {"label": "发布确认", "icon": "rocket", "description": "A12 Code Review 通过后确认发布上线"},
 }
 
+# Reject reason enum → Chinese label
+REJECT_REASON_LABELS: dict[str, str] = {
+    # Gate 0
+    "requirement_unclear": "需求不清晰",
+    "requirement_incomplete": "需求不完整",
+    "acceptance_criteria_insufficient": "验收标准不足",
+    "business_not_feasible": "业务不可行",
+    "risk_unacceptable": "风险过高",
+    "conflict_unresolved": "存在冲突",
+    # Gate 1 (stage two)
+    "prototype_not_aligned": "原型与需求不符",
+    "spec_incomplete": "Spec 不完整",
+    "api_design_issue": "API 设计问题",
+    "erd_incomplete": "ERD 不完整",
+    "acceptance_criteria_mismatch": "验收标准遗漏",
+    "prototype_change_needed": "需要原型修改",
+    "other": "其他",
+}
 
-class AutoCreateRequest(BaseModel):
+# ── Pydantic models ────────────────────────────────────────────────────────
+
+
+class ApprovalCreateBody(BaseModel):
     req_id: str
-    gate: int
-    agent_id: str = ""
-    review_data: Optional[dict] = None
+    session_id: str = ""
+    cycle: int = 0
+    gate_level: int = 0
+
+
+class RejectReason(BaseModel):
+    category: str
+    description: str
+
+
+class DecideBody(BaseModel):
+    decision: str = Field(..., description="pass or reject")
+    reject_reasons: list[RejectReason] = Field(default_factory=list)
+    revision_guidance: str = ""
+    a3_rework: bool = Field(default=False, description="Gate1 only: require A3 prototype rework")
+
+
+# ── Helpers ────────────────────────────────────────────────────────────────
 
 
 async def get_db():
@@ -42,233 +82,427 @@ async def get_db():
     return await DB_POOL.acquire()
 
 
-def _compute_review_summary(agent_reviews) -> dict:
-    """Parse agent_reviews JSONB into a summary of approve/reject/abstain counts."""
-    if not isinstance(agent_reviews, dict):
-        return {"approve": 0, "reject": 0, "abstain": 0, "total": 0}
-    approve = 0; reject = 0; abstain = 0
-    for _agent, review in agent_reviews.items():
-        if not isinstance(review, dict):
-            continue
-        verdict = review.get("verdict") or review.get("status") or review.get("decision") or ""
-        verdict = verdict.lower()
-        if verdict in ("approve", "approved", "pass", "passed"):
-            approve += 1
-        elif verdict in ("reject", "rejected", "fail", "failed"):
-            reject += 1
-        else:
-            abstain += 1
-    return {"approve": approve, "reject": reject, "abstain": abstain, "total": approve + reject + abstain}
-
-
-@router.get("")
-async def list_approvals(
-    gate: Optional[int] = Query(None),
-    status: Optional[str] = Query(None),
-    limit: int = Query(50, ge=1, le=200),
-):
-    conn = await get_db()
+async def _publish_nats(subject: str, payload: dict) -> None:
+    """Best-effort publish to NATS JetStream."""
     try:
-        conditions = []
-        params = []
-        idx = 1
-        if gate is not None:
-            conditions.append(f"ga.gate = ${idx}"); params.append(gate); idx += 1
-        if status:
-            conditions.append(f"ga.status = ${idx}"); params.append(status); idx += 1
-        where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
-        params.append(limit)
-        rows = await conn.fetch(
-            f"""
-            SELECT ga.*, r.title as req_title
-            FROM gate_approvals ga
-            LEFT JOIN requirements r ON r.id = ga.req_id
-            {where}
-            ORDER BY ga.created_at DESC
-            LIMIT ${idx}
-            """, *params)
-        items = []
-        for row in rows:
-            agent_reviews = row["agent_reviews"] if isinstance(row["agent_reviews"], dict) else {}
-            sla_deadline = row["sla_deadline"]
-            sla_remaining = None
-            if sla_deadline and row["status"] == "pending":
-                remaining = (sla_deadline - datetime.now(timezone.utc)).total_seconds()
-                sla_remaining = max(0, int(remaining))
-            items.append({
-                "id": str(row["id"]),
-                "req_id": str(row["req_id"]) if row["req_id"] else None,
-                "req_title": row["req_title"] or "",
-                "gate": row["gate"],
-                "status": row["status"],
-                "approver": row["approver"],
-                "sla_deadline": sla_deadline.isoformat() if sla_deadline else None,
-                "sla_remaining_seconds": sla_remaining,
-                "agent_reviews": agent_reviews,
-                "review_summary": _compute_review_summary(agent_reviews),
-                "reject_reasons": row["reject_reasons"] if isinstance(row["reject_reasons"], list) else [],
-                "created_at": row["created_at"].isoformat() if row["created_at"] else None,
-                "resolved_at": row["resolved_at"].isoformat() if row["resolved_at"] else None,
-                "gate_meta": GATE_META.get(row["gate"]),
-            })
-        return {"items": items, "total": len(items)}
-    finally:
-        await conn.close()
+        from main import NATS_CLIENT
+        if NATS_CLIENT and NATS_CLIENT.is_connected:
+            js = NATS_CLIENT.jetstream()
+            msg_id = f"approval-{payload.get('req_id', '?')}-{payload.get('gate_level', 0)}-{payload.get('decision', '?')}"
+            await js.publish(subject, json.dumps(payload, ensure_ascii=False).encode(),
+                             headers={"Nats-Msg-Id": msg_id})
+            logger.info("Published NATS %s", subject)
+    except Exception as e:
+        logger.warning("NATS publish failed for %s: %s", subject, e)
 
 
-@router.post("")
-async def create_approval(
-    req_id: str = Query(""),
-    gate: int = Query(0),
-    body: Optional[AutoCreateRequest] = None,
-):
-    """Create approval (human via query params, or agent-auto via JSON body)."""
-    if body and body.req_id:
-        req_id = body.req_id
-        gate = body.gate
-    if not req_id:
-        raise HTTPException(status_code=400, detail="req_id is required")
-
-    conn = await get_db()
-    try:
-        req = await conn.fetchrow("SELECT id FROM requirements WHERE id = $1::uuid", req_id)
-        if not req:
-            raise HTTPException(status_code=404, detail="Requirement not found")
-
-        # Check for existing pending
-        existing = await conn.fetchrow(
-            "SELECT id FROM gate_approvals WHERE req_id = $1::uuid AND gate = $2 AND status = 'pending'",
-            req_id, gate)
-        if existing:
-            return {"id": str(existing["id"]), "status": "pending", "message": "Approval already submitted"}
-
-        sla_hours = GATE_SLA_HOURS.get(gate, 24)
-        now = datetime.now(timezone.utc)
-        sla = now + timedelta(hours=sla_hours)
-
-        # Attach agent review data if provided
-        agent_reviews = {}
-        if body and body.review_data and body.agent_id:
-            agent_reviews[body.agent_id] = body.review_data
-
-        row = await conn.fetchrow(
-            """INSERT INTO gate_approvals (req_id, gate, status, sla_deadline, agent_reviews, created_at)
-               VALUES ($1::uuid, $2, 'pending', $3, $4::jsonb, $5) RETURNING id""",
-            req_id, gate, sla, agent_reviews, now)
-        return {
-            "id": str(row["id"]), "gate": gate, "status": "pending",
-            "sla_deadline": sla.isoformat(), "gate_meta": GATE_META.get(gate),
-        }
-    finally:
-        await conn.close()
-
-
-@router.get("/check-overdue")
-async def check_overdue():
-    """List all pending approvals past their SLA deadline."""
-    conn = await get_db()
-    try:
-        now = datetime.now(timezone.utc)
-        rows = await conn.fetch(
-            "SELECT * FROM gate_approvals WHERE status = 'pending' AND sla_deadline < $1", now)
-        return {"overdue": len(rows), "items": [
-            {"id": str(r["id"]), "req_id": str(r["req_id"]) if r["req_id"] else None,
-             "gate": r["gate"], "sla_deadline": r["sla_deadline"].isoformat()}
-            for r in rows
-        ]}
-    finally:
-        await conn.close()
-
-
-@router.post("/{approval_id}/approve")
-async def approve(approval_id: str):
-    conn = await get_db()
-    try:
-        row = await conn.fetchrow("SELECT * FROM gate_approvals WHERE id = $1::uuid", approval_id)
-        if not row:
-            raise HTTPException(status_code=404, detail="Approval not found")
-        if row["status"] not in ("pending", "overdue"):
-            raise HTTPException(status_code=409, detail=f"Cannot approve: current status is {row['status']}")
-
-        req_id = str(row["req_id"])
-        gate = row["gate"]
-        now = datetime.now(timezone.utc)
-        await conn.execute(
-            "UPDATE gate_approvals SET status = 'approved', resolved_at = $1 WHERE id = $2::uuid",
-            now, approval_id)
-
-        result: dict = {"id": str(row["id"]), "status": "approved", "resolved_at": now.isoformat(),
-                        "gate": gate, "gate_meta": GATE_META.get(gate)}
-
-        # Signal Temporal workflow
-        await _signal_temporal_gate(req_id, gate, result)
-
-        await _advance_requirement(conn, req_id, gate)
-
-        return result
-    finally:
-        await conn.close()
-
-
-async def _advance_requirement(conn, req_id: str, gate: int):
-    """Update requirement status based on gate approval."""
-    gate_status_map = {
-        0: "analyzing",
-        1: "designing",
-        2: "developing",
-        3: "releasing",
-    }
-    new_status = gate_status_map.get(gate)
-    if new_status:
-        now = datetime.now(timezone.utc)
-        await conn.execute(
-            "UPDATE requirements SET status = $1, updated_at = $2 WHERE id = $3::uuid",
-            new_status, now, req_id)
-        logger.info(f"Requirement {req_id} advanced to {new_status} (gate {gate} approved)")
-
-
-async def _signal_temporal_gate(req_id: str, gate: int, result: dict):
-    """Send approve_gate Signal to the Temporal Workflow."""
+async def _signal_temporal_gate(req_id: str, gate: int, decision: str) -> None:
+    """Send approve_gate or reject_gate signal to the Temporal workflow."""
     try:
         from temporalio.client import Client
         client = await Client.connect("localhost:7233", namespace="ai-native")
 
         req_prefix = req_id[:8]
         async for wf in client.list_workflows(
-            f'WorkflowType="RequirementWorkflow" and ExecutionStatus="Running"'
+            'WorkflowType="RequirementWorkflow" and ExecutionStatus="Running"'
         ):
             if wf.id.startswith(f"req-{req_prefix}"):
                 handle = client.get_workflow_handle(wf.id)
-                await handle.signal("approve_gate", f"gate_{gate}")
-                result["temporal_signaled"] = True
-                result["workflow_id"] = wf.id
-                logger.info("Signaled approve_gate gate=%d -> workflow=%s", gate, wf.id)
+                signal_name = "approve_gate" if decision == "pass" else "reject_gate"
+                await handle.signal(signal_name, f"gate_{gate}")
+                logger.info("Signaled %s gate=%d → workflow=%s", signal_name, gate, wf.id)
                 return
 
         logger.warning("No running RequirementWorkflow found for req_id prefix=%s", req_prefix)
     except Exception as e:
-        logger.warning(f"Failed to signal Temporal workflow for gate {gate}: {e}")
+        logger.warning("Failed to signal Temporal workflow for gate %d: %s", gate, e)
 
 
-@router.post("/{approval_id}/reject")
-async def reject(approval_id: str, reason: Optional[str] = None):
+# ── Endpoints ──────────────────────────────────────────────────────────────
+
+
+@router.get("")
+async def list_approvals(
+    gate_level: Optional[int] = Query(None),
+    status: Optional[str] = Query(None),
+    limit: int = Query(50, ge=1, le=200),
+):
+    """List approvals, filtering by gate_level and/or status."""
     conn = await get_db()
     try:
-        row = await conn.fetchrow("SELECT * FROM gate_approvals WHERE id = $1::uuid", approval_id)
+        conditions = []
+        params = []
+        idx = 1
+        if gate_level is not None:
+            conditions.append(f"a.gate_level = ${idx}")
+            params.append(gate_level)
+            idx += 1
+        if status:
+            conditions.append(f"a.status = ${idx}")
+            params.append(status)
+            idx += 1
+        where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+        params.append(limit)
+
+        rows = await conn.fetch(
+            f"""
+            SELECT a.*, r.title as req_title
+            FROM approvals a
+            LEFT JOIN requirements r ON r.id = a.req_id
+            {where}
+            ORDER BY a.created_at DESC
+            LIMIT ${idx}
+            """,
+            *params,
+        )
+
+        items = []
+        for row in rows:
+            items.append({
+                "id": str(row["id"]),
+                "req_id": str(row["req_id"]) if row["req_id"] else None,
+                "req_title": row["req_title"] or "",
+                "session_id": str(row["session_id"]) if row["session_id"] else None,
+                "gate_level": row["gate_level"],
+                "cycle": row["cycle"],
+                "status": row["status"],
+                "decision": row["decision"],
+                "reject_reasons": (
+                    row["reject_reasons"]
+                    if isinstance(row["reject_reasons"], list)
+                    else []
+                ),
+                "revision_guidance": row["revision_guidance"],
+                "reviewer_user_id": row["reviewer_user_id"],
+                "reviewer_name": row["reviewer_name"],
+                "reviewed_at": row["reviewed_at"].isoformat() if row["reviewed_at"] else None,
+                "created_at": row["created_at"].isoformat() if row["created_at"] else None,
+                "gate_meta": GATE_META.get(row["gate_level"]),
+            })
+        return {"items": items, "total": len(items)}
+    finally:
+        await conn.close()
+
+
+@router.get("/{approval_id}")
+async def get_approval(approval_id: str):
+    """Get a single approval record by ID."""
+    conn = await get_db()
+    try:
+        row = await conn.fetchrow(
+            """SELECT a.*, r.title as req_title
+               FROM approvals a
+               LEFT JOIN requirements r ON r.id = a.req_id
+               WHERE a.id = $1::uuid""",
+            approval_id,
+        )
         if not row:
             raise HTTPException(status_code=404, detail="Approval not found")
-        if row["status"] not in ("pending",):
-            raise HTTPException(status_code=409, detail=f"Cannot reject: current status is {row['status']}")
+
+        return {
+            "id": str(row["id"]),
+            "req_id": str(row["req_id"]) if row["req_id"] else None,
+            "req_title": row["req_title"] or "",
+            "session_id": str(row["session_id"]) if row["session_id"] else None,
+            "gate_level": row["gate_level"],
+            "cycle": row["cycle"],
+            "status": row["status"],
+            "decision": row["decision"],
+            "reject_reasons": (
+                row["reject_reasons"]
+                if isinstance(row["reject_reasons"], list)
+                else []
+            ),
+            "revision_guidance": row["revision_guidance"],
+            "reviewer_user_id": row["reviewer_user_id"],
+            "reviewer_name": row["reviewer_name"],
+            "reviewed_at": row["reviewed_at"].isoformat() if row["reviewed_at"] else None,
+            "created_at": row["created_at"].isoformat() if row["created_at"] else None,
+            "gate_meta": GATE_META.get(row["gate_level"]),
+        }
+    finally:
+        await conn.close()
+
+
+@router.post("")
+async def create_approval(body: ApprovalCreateBody):
+    """Pre-create an approval record (idempotent)."""
+    conn = await get_db()
+    try:
+        # Check requirement exists
+        req = await conn.fetchrow(
+            "SELECT id FROM requirements WHERE id = $1::uuid", body.req_id
+        )
+        if not req:
+            raise HTTPException(status_code=404, detail="Requirement not found")
+
+        # Idempotency
+        existing = await conn.fetchrow(
+            """SELECT id FROM approvals
+               WHERE req_id = $1::uuid AND gate_level = $2 AND cycle = $3 AND status = 'pending'""",
+            body.req_id, body.gate_level, body.cycle,
+        )
+        if existing:
+            return {
+                "id": str(existing["id"]),
+                "status": "pending",
+                "message": "Approval already exists",
+            }
 
         now = datetime.now(timezone.utc)
-        reject_reasons = list(row["reject_reasons"]) if isinstance(row["reject_reasons"], list) else []
-        if reason:
-            reject_reasons.append({"reason": reason, "at": now.isoformat()})
+        row = await conn.fetchrow(
+            """INSERT INTO approvals (req_id, session_id, gate_level, cycle, status, created_at)
+               VALUES ($1::uuid, $2::uuid, $3, $4, 'pending', $5) RETURNING id""",
+            body.req_id, body.session_id or None, body.gate_level, body.cycle, now,
+        )
+        return {
+            "id": str(row["id"]),
+            "gate_level": body.gate_level,
+            "cycle": body.cycle,
+            "status": "pending",
+            "gate_meta": GATE_META.get(body.gate_level),
+        }
+    finally:
+        await conn.close()
 
+
+@router.get("/{approval_id}/context")
+async def get_approval_context(approval_id: str):
+    """Assemble Gate approval context.
+
+    Gate 0: A1 draft + A2 analysis.
+    Gate 1: A3 prototype + A4 spec + A5 design review report.
+    """
+    conn = await get_db()
+    try:
+        approval = await conn.fetchrow(
+            "SELECT * FROM approvals WHERE id = $1::uuid", approval_id
+        )
+        if not approval:
+            raise HTTPException(status_code=404, detail="Approval not found")
+
+        req_id = str(approval["req_id"])
+        cycle = approval["cycle"]
+        gate_level = approval["gate_level"]
+
+        if gate_level == 1:
+            return await _build_gate1_context(conn, req_id, cycle, approval)
+        return await _build_gate0_context(conn, req_id, cycle, approval)
+    finally:
+        await conn.close()
+
+
+async def _build_gate0_context(conn, req_id: str, cycle: int, approval) -> dict:
+    """Build Gate0 context: A1 draft + A2 analysis."""
+    req = await conn.fetchrow(
+        "SELECT requirement_draft, confidence_score FROM requirements WHERE id = $1::uuid",
+        req_id,
+    )
+    requirement_draft = None
+    confidence_score = None
+    if req:
+        requirement_draft = req["requirement_draft"] if isinstance(req["requirement_draft"], dict) else {}
+        confidence_score = req["confidence_score"]
+
+    a1_row = await conn.fetchrow(
+        """SELECT artifact FROM agent_results
+           WHERE req_id = $1::uuid AND agent_key = 'A1' AND cycle = $2
+           ORDER BY created_at DESC LIMIT 1""",
+        req_id, cycle,
+    )
+
+    wireframe_url = None
+    if a1_row and isinstance(a1_row["artifact"], dict):
+        wireframe_url = a1_row["artifact"].get("wireframe_url")
+
+    a2_row = await conn.fetchrow(
+        """SELECT artifact, status FROM agent_results
+           WHERE req_id = $1::uuid AND agent_key = 'A2' AND cycle = $2
+           ORDER BY created_at DESC LIMIT 1""",
+        req_id, cycle,
+    )
+
+    a2_missing = True
+    a2_artifact: dict = {}
+    if a2_row:
+        a2_missing = False
+        a2_artifact = a2_row["artifact"] if isinstance(a2_row["artifact"], dict) else {}
+
+    return {
+        "req_id": req_id,
+        "session_id": str(approval["session_id"]) if approval["session_id"] else None,
+        "cycle": cycle,
+        "gate_level": approval["gate_level"],
+        "a1_output": {
+            "requirement_draft": requirement_draft,
+            "wireframe_url": wireframe_url,
+            "confidence_score": confidence_score,
+        },
+        "a2_output": {
+            "feasibility_assessment": a2_artifact.get("feasibility_assessment"),
+            "confirmation_checklist": a2_artifact.get("confirmation_checklist", []),
+            "conflicts": a2_artifact.get("conflicts", []),
+            "quality_score": a2_artifact.get("quality_score"),
+            "a2_missing": a2_missing,
+        },
+        "gate_meta": GATE_META.get(approval["gate_level"]),
+    }
+
+
+async def _build_gate1_context(conn, req_id: str, cycle: int, approval) -> dict:
+    """Build Gate1 context: A3 prototype + A4 spec + A5 design review."""
+    # A3 output
+    a3_proto = await conn.fetchrow(
+        """SELECT prototype_url, screens, version, status
+           FROM prototype_artifacts
+           WHERE req_id = $1::uuid AND status = 'confirmed'
+           ORDER BY version DESC LIMIT 1""",
+        req_id,
+    )
+    a3_output = {
+        "prototype_url": a3_proto["prototype_url"] if a3_proto else None,
+        "screens": a3_proto["screens"] if a3_proto and isinstance(a3_proto["screens"], list) else [],
+        "version": a3_proto["version"] if a3_proto else 0,
+        "confirmed": a3_proto is not None,
+    }
+
+    # A4 output
+    a4_ds = await conn.fetchrow(
+        """SELECT spec_doc, openapi_schema, erd_diagram, quality_score
+           FROM design_specs
+           WHERE req_id = $1::uuid
+           ORDER BY version DESC LIMIT 1""",
+        req_id,
+    )
+    a4_missing = a4_ds is None
+    a4_output = {
+        "spec_doc": a4_ds["spec_doc"] if a4_ds and isinstance(a4_ds["spec_doc"], dict) else {},
+        "openapi_schema": a4_ds["openapi_schema"] if a4_ds and isinstance(a4_ds["openapi_schema"], dict) else {},
+        "erd_diagram": a4_ds["erd_diagram"] if a4_ds and isinstance(a4_ds["erd_diagram"], dict) else {},
+        "quality_score": float(a4_ds["quality_score"]) if a4_ds and a4_ds["quality_score"] else 0.0,
+        "a4_missing": a4_missing,
+    }
+
+    # A5 output
+    a5_row = await conn.fetchrow(
+        """SELECT artifact FROM agent_results
+           WHERE req_id = $1::uuid AND agent_key = 'A5'
+           ORDER BY cycle DESC, created_at DESC LIMIT 1""",
+        req_id,
+    )
+    a5_missing = a5_row is None
+    a5_output: dict = {"check_report": None, "a5_missing": a5_missing}
+    if a5_row and isinstance(a5_row["artifact"], dict):
+        a5_output["check_report"] = a5_row["artifact"].get("check_report")
+
+    return {
+        "req_id": req_id,
+        "session_id": str(approval["session_id"]) if approval["session_id"] else None,
+        "cycle": cycle,
+        "gate_level": approval["gate_level"],
+        "a3_output": a3_output,
+        "a4_output": a4_output,
+        "a5_output": a5_output,
+        "gate_meta": GATE_META.get(approval["gate_level"]),
+    }
+
+
+@router.post("/{approval_id}/decide")
+async def decide_approval(approval_id: str, body: DecideBody):
+    """Submit a pass/reject decision for an approval."""
+    if body.decision not in ("pass", "reject"):
+        raise HTTPException(status_code=400, detail="decision must be 'pass' or 'reject'")
+
+    conn = await get_db()
+    try:
+        row = await conn.fetchrow(
+            "SELECT * FROM approvals WHERE id = $1::uuid", approval_id
+        )
+        if not row:
+            raise HTTPException(status_code=404, detail="Approval not found")
+        if row["status"] != "pending":
+            raise HTTPException(status_code=409, detail=f"Already decided: status={row['status']}")
+
+        req_id = str(row["req_id"])
+        gate = row["gate_level"]
+        cycle = row["cycle"]
+        session_id = str(row["session_id"]) if row["session_id"] else ""
+        now = datetime.now(timezone.utc)
+
+        if body.decision == "reject":
+            if not body.reject_reasons:
+                raise HTTPException(status_code=400, detail="reject_reasons required for rejection")
+            if not body.revision_guidance:
+                raise HTTPException(status_code=400, detail="revision_guidance required for rejection")
+
+            reviewer_name = f"gate{gate}_reviewer"
+
+            await conn.execute(
+                """UPDATE approvals
+                   SET status = 'decided', decision = 'reject',
+                       reject_reasons = $1::jsonb, revision_guidance = $2,
+                       a3_rework = $3,
+                       reviewer_user_id = $4, reviewer_name = $4,
+                       reviewed_at = $5
+                   WHERE id = $6::uuid""",
+                json.dumps([r.model_dump() for r in body.reject_reasons], ensure_ascii=False),
+                body.revision_guidance,
+                body.a3_rework if gate == 1 else False,
+                reviewer_name,
+                now,
+                approval_id,
+            )
+
+            nats_payload = {
+                "req_id": req_id,
+                "session_id": session_id,
+                "cycle": cycle,
+                "gate_level": gate,
+                "decision": "reject",
+                "reject_reasons": [r.model_dump() for r in body.reject_reasons],
+                "revision_guidance": body.revision_guidance,
+                "a3_rework": body.a3_rework if gate == 1 else False,
+                "reviewer_user_id": reviewer_name,
+                "reviewer_name": reviewer_name,
+                "reviewed_at": now.isoformat(),
+            }
+            await _publish_nats("agent.result.gate0.reject", nats_payload)
+            await _signal_temporal_gate(req_id, gate, "reject")
+
+            return {"id": approval_id, "status": "decided", "decision": "reject",
+                    "reviewed_at": now.isoformat(), "gate_meta": GATE_META.get(gate)}
+
+        # pass
+        reviewer_name = f"gate{gate}_reviewer"
         await conn.execute(
-            "UPDATE gate_approvals SET status = 'rejected', resolved_at = $1, reject_reasons = $2::jsonb WHERE id = $3::uuid",
-            now, reject_reasons, approval_id)
-        return {"id": str(row["id"]), "status": "rejected", "resolved_at": now.isoformat(),
-                "reject_reasons": reject_reasons, "gate_meta": GATE_META.get(row["gate"])}
+            """UPDATE approvals
+               SET status = 'decided', decision = 'pass',
+                   reviewer_user_id = $1, reviewer_name = $1,
+                   reviewed_at = $2
+               WHERE id = $3::uuid""",
+            reviewer_name,
+            now,
+            approval_id,
+        )
+
+        nats_payload = {
+            "req_id": req_id,
+            "session_id": session_id,
+            "cycle": cycle,
+            "gate_level": gate,
+            "decision": "pass",
+            "reviewer_user_id": "gate0_reviewer",
+            "reviewer_name": "gate0_reviewer",
+            "reviewed_at": now.isoformat(),
+        }
+        await _publish_nats("agent.result.gate0.pass", nats_payload)
+        await _signal_temporal_gate(req_id, gate, "pass")
+
+        # NOTE: requirements.status update (to 'approved') is the Orchestrator's
+        #       responsibility per data dictionary §1.1. We do NOT write it here —
+        #       the Orchestrator handles it on receiving agent.result.gate0.pass.
+
+        return {"id": approval_id, "status": "decided", "decision": "pass",
+                "reviewed_at": now.isoformat(), "gate_meta": GATE_META.get(gate)}
     finally:
         await conn.close()

@@ -51,7 +51,8 @@ class TestCaseGeneratorAgent(BaseAgentWorker):
         await super().init()
         # Subscribe to test.validate events
         try:
-            await self.nc.subscribe("test.validate", cb=self._handle_validate_event)
+            await self.js.subscribe("test.validate", cb=self._handle_validate_event,
+                                    stream="AI_NATIVE_EVENTS", durable="A7_consumer_test_validate")
             logger.info(f"[A7] Subscribed to test.validate events")
         except Exception as e:
             logger.warning(f"[A7] Failed to subscribe to test.validate: {e}")
@@ -172,7 +173,8 @@ class TestCaseGeneratorAgent(BaseAgentWorker):
             "req_id": req_id,
             "agent_id": AGENT_ID,
         }
-        await self.nc.publish("test.assets_ready", json.dumps(envelope, ensure_ascii=False).encode())
+        await self.js.publish("test.assets_ready", json.dumps(envelope, ensure_ascii=False).encode(),
+                              headers={"Nats-Msg-Id": f"test-assets-{req_id}-{asset_id}"})
         logger.info(f"[A7] Published test.assets_ready: {len(test_cases)} cases, asset_id={asset_id}")
 
         await self.report_status(req_id, "completed",
@@ -466,7 +468,8 @@ class TestCaseGeneratorAgent(BaseAgentWorker):
             "req_id": req_id,
             "agent_id": AGENT_ID,
         }
-        await self.nc.publish("test.validated", json.dumps(event_envelope, ensure_ascii=False).encode())
+        await self.js.publish("test.validated", json.dumps(event_envelope, ensure_ascii=False).encode(),
+                              headers={"Nats-Msg-Id": f"test-validated-{req_id}-{case_id}"})
         logger.info(f"[A7] Published test.validated: {case_id}, status={validation_status}")
 
         return result
