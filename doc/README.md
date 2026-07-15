@@ -1,4 +1,4 @@
-# AI-Native 研发协同系统文档目录
+﻿# AI-Native 研发协同系统文档目录
 
 ## 📂 目录结构
 
@@ -70,6 +70,9 @@
 
 ## 🔄 最近更新
 
+### 2026-07-14
+- ✅ 修正 Agent规格/README.md：A2 已通过 Orchestrator NATS dispatch 调度（RS.KNOWLEDGE_ANALYSIS），非"未调度"状态
+
 ### 2026-07-09
 - ✅ 新增《系统状态机与信息流设计》v2.4 — 完整系统基线
 - ✅ 重新整理 A1 需求分析 Agent 设计（四份旧文档合并为完整设计文档）
@@ -83,6 +86,6 @@
 - ✅ 将 bugs/、specs/、plan/ 按类型归档
 
 ### 待办
-- [ ] 补充 A3、A4、A5、A6、A7、A11、A12 规格文档
+- [ ] 补充 A3、A4、A5、A6、A11、A12 规格文档
 - [ ] Orchestrator 规格与《系统状态机》基线对齐更新
-- [ ] A2、A7 调度接入 Orchestrator 主状态机
+- [ ] A7 调度接入 Orchestrator 主状态机（已实现，待接入 `_AGENT_STATES`）

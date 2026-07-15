@@ -1,4 +1,4 @@
-# Agent规格文档清单
+﻿# Agent规格文档清单
 
 ## 📋 已完成规格
 
@@ -18,51 +18,51 @@
 ## 🚧 待编写规格
 
 ### 主流程 Agent（按调度顺序）
-1. **A3 - UI生成Agent** (DESIGNING 阶段)
+1. **A2 - 知识分析Agent** (KNOWLEDGE_ANALYSIS 阶段)
+   - 职责: 从知识库检索相关历史需求和技术文档，可行性评估、冲突识别
+   - 代码: `repos/agent-workers/a2_knowledge_analyst.py`
+   - 状态: ✅ 已实现并调度（Orchestrator 通过 NATS dispatch，对应 RS.KNOWLEDGE_ANALYSIS）
+
+2. **A3 - UI生成Agent** (DESIGNING 阶段)
    - 职责: 根据需求生成 UI 状态图和交互流程
    - 代码: `repos/agent-workers/a3_ui_generator.py`
    - 状态: ✅ 已实现并调度
 
-2. **A4 - 规格编写Agent** (DESIGNING 阶段)
+3. **A4 - 规格编写Agent** (DESIGNING 阶段)
    - 职责: 生成 OpenAPI 规格和 ERD 设计
    - 代码: `repos/agent-workers/a4_spec_writer.py`
    - 状态: ✅ 已实现并调度（自持久化到 api_schemas/erd_designs 表）
 
-3. **A5 - 设计评审Agent** (REVIEWING 阶段)
+4. **A5 - 设计评审Agent** (REVIEWING 阶段)
    - 职责: 评审 A3+A4 的设计产物，决定是否 rework
    - 代码: `repos/agent-workers/a5_design_review.py`
    - 状态: ✅ 已实现并调度
 
-4. **A6 - 任务分解Agent** (DECOMPOSING 阶段)
+5. **A6 - 任务分解Agent** (DECOMPOSING 阶段)
    - 职责: 将 spec 分解为开发任务列表
    - 代码: `repos/agent-workers/a6_spec_decomposer.py`
    - 状态: ✅ 已实现并调度
 
-5. **A9 - 开发Agent** (DEVELOPING 阶段)
+6. **A9 - 开发Agent** (DEVELOPING 阶段)
    - 职责: 双脑架构（Coder + Auditor）生成代码
    - 代码: `repos/agent-workers/a9/` (engine.py, coder.py, auditor.py)
    - 状态: ✅ 已实现并调度
 
-6. **A11 - 自动化测试Agent** (TESTING 阶段)
+7. **A11 - 自动化测试Agent** (TESTING 阶段)
    - 职责: 生成测试策略并执行测试
    - 代码: `repos/agent-workers/a11_test_agent_stub.py`
    - 状态: ⚠️ Stub 实现（15% 模拟失败率，生产不可用）
 
-7. **A12 - 代码审查Agent** (REVIEWING_CODE 阶段)
+8. **A12 - 代码审查Agent** (REVIEWING_CODE 阶段)
    - 职责: 审查代码质量、安全性、规范性
    - 代码: `repos/agent-workers/a12_code_review.py`
    - 状态: ✅ 已实现并调度
 
-### 辅助 Agent（未调度）
-8. **A2 - 知识检索Agent**
-   - 职责: 从知识库检索相关历史需求和技术文档
-   - 代码: ⚠️ 未找到实现文件
-   - 状态: ❌ 未在 `requirement_workflow.py` 的 `_AGENT_STATES` 中
-
+### 辅助 Agent（已实现但未接入主状态机调度）
 9. **A7 - 测试用例生成Agent**
    - 职责: 根据 spec 生成测试用例
    - 代码: `repos/agent-workers/a7_test_case_generator.py`
-   - 状态: ❌ 已实现但未调度
+   - 状态: ❌ 已实现但未在 `requirement_workflow.py` 的 `_AGENT_STATES` 中调度
 
 10. **A8 - 架构评审Agent**
     - 职责: 评审系统架构设计
@@ -109,10 +109,10 @@
 
 ### P1（短期补充）
 - A11, A12 - 测试与审查阶段
-- A7 - 测试用例生成（需先修复调度）
+- A7 - 测试用例生成（需先修复调度接入主状态机）
 
 ### P2（中期补充）
-- A2, A8 - 辅助功能（需先修复调度）
+- A8 - 架构评审辅助功能（需先修复调度接入）
 
 ### P3（长期规划）
 - A10, A13 - 可选功能
