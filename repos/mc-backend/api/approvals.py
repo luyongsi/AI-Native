@@ -72,6 +72,8 @@ class DecideBody(BaseModel):
     reject_reasons: list[RejectReason] = Field(default_factory=list)
     revision_guidance: str = ""
     a3_rework: bool = Field(default=False, description="Gate1 only: require A3 prototype rework")
+    a6_rework: bool = Field(default=True, description="Gate2 only: require A6 DAG rework")
+    a7_rework: bool = Field(default=True, description="Gate2 only: require A7 test case rework")
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────
@@ -287,6 +289,8 @@ async def get_approval_context(approval_id: str):
 
         if gate_level == 1:
             return await _build_gate1_context(conn, req_id, cycle, approval)
+        elif gate_level == 2:
+            return await _build_gate2_context(conn, req_id, cycle, approval)
         return await _build_gate0_context(conn, req_id, cycle, approval)
     finally:
         await conn.close()
@@ -407,6 +411,115 @@ async def _build_gate1_context(conn, req_id: str, cycle: int, approval) -> dict:
     }
 
 
+async def _build_gate2_context(conn, req_id: str, cycle: int, approval) -> dict:
+    """Build Gate2 context: A6 DAG + A7 test assets + A8 architecture review."""
+    # Requirement info
+    req = await conn.fetchrow(
+        "SELECT title, tech_prep_status, tech_prep_revision_count FROM requirements WHERE id = $1::uuid",
+        req_id,
+    )
+    req_info = {
+        "title": req["title"] if req else "",
+        "tech_prep_status": req["tech_prep_status"] if req else None,
+        "tech_prep_revision_count": req["tech_prep_revision_count"] if req else 0,
+    }
+
+    # A6 output (DAG)
+    a6_row = await conn.fetchrow(
+        """SELECT artifact FROM agent_results
+           WHERE req_id = $1::uuid AND agent_key = 'A6' AND cycle = $2
+           ORDER BY created_at DESC LIMIT 1""",
+        req_id, cycle,
+    )
+    a6_missing = a6_row is None
+    a6_artifact = a6_row["artifact"] if a6_row and isinstance(a6_row["artifact"], dict) else {}
+    a6_output = {
+        "dag": a6_artifact.get("dag", {}),
+        "validation": a6_artifact.get("validation", {}),
+        "task_dags_id": a6_artifact.get("task_dags_id"),
+        "a6_missing": a6_missing,
+    }
+
+    # Also fetch from task_dags for full DAG detail
+    dag_row = await conn.fetchrow(
+        """SELECT dag_json, node_count, critical_path_length,
+                  total_estimated_hours, human_review_nodes, source
+           FROM task_dags
+           WHERE req_id = $1::uuid AND cycle = $2
+           ORDER BY version DESC LIMIT 1""",
+        req_id, cycle,
+    )
+    if dag_row:
+        a6_output["dag_detail"] = {
+            "dag_json": dag_row["dag_json"] if isinstance(dag_row["dag_json"], dict) else {},
+            "node_count": dag_row["node_count"],
+            "critical_path_length": dag_row["critical_path_length"],
+            "total_estimated_hours": float(dag_row["total_estimated_hours"]) if dag_row["total_estimated_hours"] else 0,
+            "human_review_nodes": dag_row["human_review_nodes"],
+            "source": dag_row["source"],
+        }
+
+    # A7 output (test assets)
+    a7_row = await conn.fetchrow(
+        """SELECT artifact FROM agent_results
+           WHERE req_id = $1::uuid AND agent_key = 'A7' AND cycle = $2
+           ORDER BY created_at DESC LIMIT 1""",
+        req_id, cycle,
+    )
+    a7_missing = a7_row is None
+    a7_artifact = a7_row["artifact"] if a7_row and isinstance(a7_row["artifact"], dict) else {}
+    a7_output = {
+        "test_plan": a7_artifact.get("test_plan", {}),
+        "test_assets": a7_artifact.get("test_assets", {}),
+        "dag_coverage": a7_artifact.get("dag_coverage", {}),
+        "a7_missing": a7_missing,
+    }
+
+    # Also fetch latest test_assets record
+    ta_row = await conn.fetchrow(
+        """SELECT id, total_cases, priority_distribution, source, version, created_at
+           FROM test_assets
+           WHERE req_id = $1::uuid
+           ORDER BY created_at DESC LIMIT 1""",
+        req_id,
+    )
+    if ta_row:
+        a7_output["test_asset_record"] = {
+            "test_asset_id": ta_row["id"],
+            "total_cases": ta_row["total_cases"],
+            "priority_distribution": ta_row["priority_distribution"] if isinstance(ta_row["priority_distribution"], dict) else {},
+            "version": ta_row["version"],
+            "created_at": ta_row["created_at"].isoformat() if ta_row["created_at"] else None,
+        }
+
+    # A8 output (architecture review)
+    a8_row = await conn.fetchrow(
+        """SELECT artifact FROM agent_results
+           WHERE req_id = $1::uuid AND agent_key = 'A8' AND cycle = $2
+           ORDER BY created_at DESC LIMIT 1""",
+        req_id, cycle,
+    )
+    a8_missing = a8_row is None
+    a8_artifact = a8_row["artifact"] if a8_row and isinstance(a8_row["artifact"], dict) else {}
+    a8_review = a8_artifact.get("review", {})
+    a8_output = {
+        "review": a8_review,
+        "a8_missing": a8_missing,
+    }
+
+    return {
+        "req_id": req_id,
+        "session_id": str(approval["session_id"]) if approval["session_id"] else None,
+        "cycle": cycle,
+        "gate_level": approval["gate_level"],
+        "requirement_info": req_info,
+        "a6_output": a6_output,
+        "a7_output": a7_output,
+        "a8_output": a8_output,
+        "gate_meta": GATE_META.get(approval["gate_level"]),
+    }
+
+
 @router.post("/{approval_id}/decide")
 async def decide_approval(approval_id: str, body: DecideBody):
     """Submit a pass/reject decision for an approval."""
@@ -442,17 +555,21 @@ async def decide_approval(approval_id: str, body: DecideBody):
                    SET status = 'decided', decision = 'reject',
                        reject_reasons = $1::jsonb, revision_guidance = $2,
                        a3_rework = $3,
-                       reviewer_user_id = $4, reviewer_name = $4,
-                       reviewed_at = $5
-                   WHERE id = $6::uuid""",
+                       a6_rework = $4, a7_rework = $5,
+                       reviewer_user_id = $6, reviewer_name = $6,
+                       reviewed_at = $7
+                   WHERE id = $8::uuid""",
                 json.dumps([r.model_dump() for r in body.reject_reasons], ensure_ascii=False),
                 body.revision_guidance,
                 body.a3_rework if gate == 1 else False,
+                body.a6_rework if gate == 2 else False,
+                body.a7_rework if gate == 2 else False,
                 reviewer_name,
                 now,
                 approval_id,
             )
 
+            nats_subject = f"agent.result.gate{gate}.reject"
             nats_payload = {
                 "req_id": req_id,
                 "session_id": session_id,
@@ -462,11 +579,13 @@ async def decide_approval(approval_id: str, body: DecideBody):
                 "reject_reasons": [r.model_dump() for r in body.reject_reasons],
                 "revision_guidance": body.revision_guidance,
                 "a3_rework": body.a3_rework if gate == 1 else False,
+                "a6_rework": body.a6_rework if gate == 2 else False,
+                "a7_rework": body.a7_rework if gate == 2 else False,
                 "reviewer_user_id": reviewer_name,
                 "reviewer_name": reviewer_name,
                 "reviewed_at": now.isoformat(),
             }
-            await _publish_nats("agent.result.gate0.reject", nats_payload)
+            await _publish_nats(nats_subject, nats_payload)
             await _signal_temporal_gate(req_id, gate, "reject")
 
             return {"id": approval_id, "status": "decided", "decision": "reject",
@@ -485,17 +604,18 @@ async def decide_approval(approval_id: str, body: DecideBody):
             approval_id,
         )
 
+        nats_subject = f"agent.result.gate{gate}.pass"
         nats_payload = {
             "req_id": req_id,
             "session_id": session_id,
             "cycle": cycle,
             "gate_level": gate,
             "decision": "pass",
-            "reviewer_user_id": "gate0_reviewer",
-            "reviewer_name": "gate0_reviewer",
+            "reviewer_user_id": f"gate{gate}_reviewer",
+            "reviewer_name": f"gate{gate}_reviewer",
             "reviewed_at": now.isoformat(),
         }
-        await _publish_nats("agent.result.gate0.pass", nats_payload)
+        await _publish_nats(nats_subject, nats_payload)
         await _signal_temporal_gate(req_id, gate, "pass")
 
         # NOTE: requirements.status update (to 'approved') is the Orchestrator's

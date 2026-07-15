@@ -230,6 +230,7 @@ from api.prototype import router as prototype_router
 from ws.ws_gateway import router as ws_router
 from api.workflow import router as workflow_router
 from api.llm_calls import router as llm_calls_router
+from api.gate2 import router as gate2_router  # Phase3 Gate2
 
 app.include_router(dashboard_router)
 app.include_router(requirements_router)
@@ -246,6 +247,7 @@ app.include_router(prototype_router)
 app.include_router(ws_router)
 app.include_router(workflow_router)
 app.include_router(llm_calls_router)
+app.include_router(gate2_router)  # Phase3 Gate2
 
 # Optional Phase 4 + Phase 5 routers (knowledge graph, topology, etc.)
 optional_routers = {

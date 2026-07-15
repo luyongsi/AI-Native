@@ -1,11 +1,12 @@
 """
 MC Backend — NATS subscriber for context.ready.A1 (Gate0 rejection) and
-context.ready.gate0 (Gate0 approval creation).
+context.ready.gate0/gate1/gate2 (Gate approval creation).
 
 Design:
   - context.ready.A1: Gate0 rejected → reopen session, inject system message
   - context.ready.gate0: Orchestrator reached Gate0 → pre-create approval record
   - context.ready.gate1: Orchestrator reached Gate1 → pre-create approval record
+  - context.ready.gate2: Orchestrator reached Gate2 → pre-create approval record
 """
 from __future__ import annotations
 
@@ -83,6 +84,28 @@ async def subscribe_context_ready_a1(db_pool, nats_url: str):
                     await nc.drain()
         except Exception as e:
             logger.error("[nats-sub] Connection error: %s — retrying in 5s", e)
+            await __import__("asyncio").sleep(5)
+
+
+async def subscribe_context_ready_gate2(db_pool, nats_url: str):
+    """Subscribe to context.ready.gate2 — pre-create Gate2 approval record."""
+    while True:
+        try:
+            nc = await nats.connect(nats_url)
+            js = nc.jetstream()
+            await js.subscribe("context.ready.gate2", cb=_make_gate_handler(db_pool, gate_level=2),
+                               stream="AI_NATIVE_EVENTS", durable="mc_backend_gate2")
+            logger.info("[nats-sub] Subscribed to context.ready.gate2")
+            try:
+                while nc.is_connected:
+                    await __import__("asyncio").sleep(60)
+            except Exception:
+                pass
+            finally:
+                if nc.is_connected:
+                    await nc.drain()
+        except Exception as e:
+            logger.error("[nats-sub] context.ready.gate2 connection error: %s — retrying in 5s", e)
             await __import__("asyncio").sleep(5)
 
 

@@ -31,3 +31,6 @@ logs/
 # Environment
 .env
 .env.local
+
+# WorkBuddy local state
+.workbuddy/

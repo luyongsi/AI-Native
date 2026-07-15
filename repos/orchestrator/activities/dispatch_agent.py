@@ -94,15 +94,16 @@ async def dispatch_agent(
         )
 
     # Map agent_id to NATS subject suffix (must match agent_type in each agent class)
+    # Phase3 agents (A6/A7/A8) use agent_id as subject suffix (context.ready.A6/A7/A8)
     _AGENT_TYPE_MAP = {
         "A1": "requirement_intake",
         "A2": "knowledge_analyst",
         "A3": "ui_generator",
         "A4": "spec_writer",
         "A5": "design_review",
-        "A6": "spec_decomposer",
-        "A7": "test_case_generator",
-        "A8": "architecture_expert",
+        "A6": "A6",           # Phase3: context.ready.A6
+        "A7": "A7",           # Phase3: context.ready.A7
+        "A8": "A8",           # Phase3: context.ready.A8
         "A9": "dev_agent",
         "A10": "ci_cd",
         "A11": "test_agent",
@@ -117,11 +118,13 @@ async def dispatch_agent(
 
     # Extract requirement fields for Agent direct access
     req_ctx = ctx_meta.get("requirement_context", {})
-    envelope = {
-        "event_id": f"dispatch-{req_id}-{state}-{agent_id}",
-        "event_type": event_type,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "payload": {
+
+    # Build payload based on agent_id — Phase3 agents get structured context
+    if agent_id in ("A6", "A7", "A8"):
+        # Phase3 structured context package (per data dictionary)
+        payload_data = _build_phase3_payload(req_id, agent_id, ctx_meta, rework_context)
+    else:
+        payload_data = {
             "req_id": req_id,
             "state": state,
             "agent_id": agent_id,
@@ -132,7 +135,13 @@ async def dispatch_agent(
             "title": req_ctx.get("title", ""),
             "description": req_ctx.get("description", ""),
             "spec_sections": ctx_meta.get("spec_sections", []),
-        },
+        }
+
+    envelope = {
+        "event_id": f"dispatch-{req_id}-{state}-{agent_id}",
+        "event_type": event_type,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "payload": payload_data,
         "req_id": req_id,
     }
 
@@ -164,3 +173,72 @@ async def dispatch_agent(
         result["note"] = f"NATS publish failed: {e}"
 
     return result
+
+
+def _build_phase3_payload(req_id: str, agent_id: str,
+                          ctx_meta: dict, rework_context: dict | None) -> dict:
+    """Build structured context payload for Phase3 agents (A6/A7/A8).
+
+    Each agent gets a tailored context package per data dictionary.
+    """
+    rework = rework_context or {}
+    artifact_ctx = ctx_meta.get("artifact_context", {})
+    spec_sections = ctx_meta.get("spec_sections", [])
+
+    # Common spec_package extraction
+    a4 = artifact_ctx.get("A4", {})
+    spec_package = {
+        "spec_doc": {
+            "modules": a4.get("modules", []),
+            "states": a4.get("states", []),
+            "sections": spec_sections,
+        },
+        "openapi_schema": a4.get("openapi", {}),
+        "erd_diagram": a4.get("erd", {}),
+        "ddl_statements": a4.get("ddl", ""),
+    }
+
+    # Common fields
+    base = {
+        "req_id": req_id,
+        "session_id": ctx_meta.get("session_id", ""),
+        "cycle": ctx_meta.get("cycle", 0),
+        "spec_package": spec_package,
+        "revision_context": {
+            "is_revision": rework.get("is_revision", False),
+            "tech_prep_revision_count": rework.get("tech_prep_revision_count", 0),
+            "gate2_rejection": rework.get("gate2_rejection"),
+            "previous_a8_report": rework.get("previous_a8_report"),
+        },
+    }
+
+    if agent_id == "A6":
+        # A6 context: spec_package + revision_context
+        return base
+
+    elif agent_id == "A7":
+        # A7 context: spec_package + dag_preview + revision_context
+        a6_artifact = artifact_ctx.get("A6", {})
+        dag_nodes = (a6_artifact.get("dag", {}) or {}).get("nodes", [])
+        dag_available = bool(dag_nodes) and rework.get("is_revision", False) is not True
+
+        return {
+            **base,
+            "dag_preview": {
+                "nodes": dag_nodes,
+                "node_count": len(dag_nodes),
+                "dag_available": dag_available,
+            },
+        }
+
+    elif agent_id == "A8":
+        # A8 context: dag + spec_package (for LLM review)
+        a6_artifact = artifact_ctx.get("A6", {})
+        dag = a6_artifact.get("dag", {})
+
+        return {
+            **base,
+            "dag": dag,
+        }
+
+    return base

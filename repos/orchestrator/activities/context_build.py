@@ -238,7 +238,7 @@ def _extract_artifact_context(spec: dict, state: str) -> dict:
         "analyzing": [],
         "designing": ["A1", "A2"],
         "reviewing": ["A1", "A2", "A3", "A4"],
-        "decomposing": ["A1", "A4", "A5"],
+        "decomposing": ["A1", "A2", "A4", "A5", "A6", "A7"],  # Phase3: A6+A7 for GATHER
         "developing": ["A1", "A4", "A5", "A6", "A7"],
         "testing": ["A4", "A7", "A9"],
         "reviewing_code": ["A4", "A9", "A11"],

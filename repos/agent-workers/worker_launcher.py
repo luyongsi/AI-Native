@@ -44,10 +44,11 @@ from a3_ui_generator import UIGeneratorAgent
 from a4_spec_writer import A4SpecWriter
 from a5_design_review import DesignReviewAgent
 
-# ── Phase 3+ agents (disabled for now — enable when stages 3-4 go live)
-# from a6_spec_decomposer import SpecDecomposerAgent
-# from a7_test_case_generator import TestCaseGeneratorAgent
-# from a8_architecture_expert import ArchitectureExpertAgent
+# ── Phase 3 agents (A6 + A7 + A8) — Stage 3 tech prep pipeline ─────────
+from a6_spec_decomposer import SpecDecomposerAgent
+from a7_test_case_generator import TestCaseGeneratorAgent
+from a8_architecture_expert import ArchitectureExpertAgent
+# ── Phase 4+ agents (disabled for now — enable when stages 4-5 go live)
 # from a9.a9_dev_agent import A9DevAgent
 # from ci_agent import CICDAgent
 # from a11_test_agent_stub import A11TestAgentStub
@@ -67,13 +68,16 @@ logger = logging.getLogger("worker_launcher")
 # Agent 注册表
 AGENT_REGISTRY: dict[BaseAgentWorker, str] = {}
 
-# ── Phase 1 + Phase 2 agents: A1 + A2 + A3 + A4 + A5 ─────────────────
+# ── Phase 1 + Phase 2 + Phase 3 agents: A1 + A2 + A3 + A4 + A5 + A6 + A7 + A8 ──
 _PHASE1_AGENTS = [
     A1RequirementIntake(),
     A2KnowledgeAnalyst(),
     UIGeneratorAgent(),
     A4SpecWriter(),
     DesignReviewAgent(),
+    SpecDecomposerAgent(),
+    TestCaseGeneratorAgent(),
+    ArchitectureExpertAgent(),
 ]
 
 
@@ -103,8 +107,8 @@ def register_agents():
 
 async def main():
     logger.info("=" * 60)
-    logger.info("  Agent Workers Launcher — AI Native Platform (Phase 1+2)")
-    logger.info(f"  Total Agents: {len(_PHASE1_AGENTS)} (A1 + A2 + A3 + A4 + A5)")
+    logger.info("  Agent Workers Launcher — AI Native Platform (Phase 1+2+3)")
+    logger.info(f"  Total Agents: {len(_PHASE1_AGENTS)} (A1 + A2 + A3 + A4 + A5 + A6 + A7 + A8)")
     logger.info("=" * 60)
 
     agents = register_agents()
