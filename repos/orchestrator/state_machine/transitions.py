@@ -1,6 +1,7 @@
 """Transition tables for the orchestrator state machine.
 
 TRANSITION_TABLE maps every non-terminal state to its allowed next states.
+Phase3 (DECOMPOSING): includes self-loop for Gate2 reject rework.
 """
 from .states import RequirementState as RS
 
@@ -11,7 +12,7 @@ TRANSITION_TABLE: dict[RS, list[RS]] = {
     RS.DESIGNING:           [RS.SPEC_WRITING, RS.BLOCKED],         # A3 confirm -> A4 spec writing
     RS.SPEC_WRITING:        [RS.REVIEWING, RS.BLOCKED],            # A4 done -> A5 review
     RS.REVIEWING:           [RS.DECOMPOSING, RS.SPEC_WRITING, RS.BLOCKED],  # Gate 1: pass->DECOMPOSING, reject->SPEC_WRITING
-    RS.DECOMPOSING:         [RS.DEVELOPING, RS.BLOCKED],           # Gate 2 between
+    RS.DECOMPOSING:         [RS.DEVELOPING, RS.BLOCKED],           # Gate 2 pass -> DEVELOPING (Phase3 handled in workflow sub-flow)
     RS.DEVELOPING:          [RS.TESTING, RS.BLOCKED],
     RS.TESTING:             [RS.REVIEWING_CODE, RS.DEVELOPING, RS.BLOCKED],  # DEVELOPING for inner loop
     RS.REVIEWING_CODE:      [RS.RELEASING, RS.BLOCKED],            # Gate 3 between

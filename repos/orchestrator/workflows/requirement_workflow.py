@@ -45,7 +45,7 @@ _DEFAULT_RETRY = RetryPolicy(
 )
 
 # Agents that persist their own results — skip store_agent_result
-_AGENTS_THAT_PERSIST = {"A4"}
+_AGENTS_THAT_PERSIST = {"A4", "A6", "A7", "A8"}
 
 # Agent timeout per state
 _AGENT_TIMEOUTS: dict[RS, timedelta] = {
@@ -53,7 +53,7 @@ _AGENT_TIMEOUTS: dict[RS, timedelta] = {
     RS.KNOWLEDGE_ANALYSIS: timedelta(minutes=10),  # A2 knowledge analysis
     RS.DESIGNING: timedelta(minutes=15),
     RS.REVIEWING: timedelta(minutes=10),
-    RS.DECOMPOSING: timedelta(minutes=10),
+    RS.DECOMPOSING: timedelta(minutes=15),          # Phase3: A6+A7 parallel, then A8
     RS.DEVELOPING: timedelta(hours=4),
     RS.TESTING: timedelta(hours=2),
     RS.REVIEWING_CODE: timedelta(minutes=15),
@@ -118,6 +118,15 @@ class RequirementWorkflow:
         self._agent_result_a3: dict | None = None
         self._agent_result_a4: dict | None = None
         self._last_a5_result: dict | None = None
+
+        # Phase3 (DECOMPOSING) GATHER tracking — A6+A7 parallel, then A8
+        self._a6_done: bool = False
+        self._a7_done: bool = False
+        self._a8_done: bool = False
+        self._a6_result: dict | None = None
+        self._a7_result: dict | None = None
+        self._a8_result: dict | None = None
+        self._tech_prep_revision_count: int = 0
 
         # DEVELOPING ↔ TESTING inner loop (T8)
         self._inner_loop_count: int = 0
@@ -199,6 +208,11 @@ class RequirementWorkflow:
         )
         context_str = str(ctx)
 
+        # DECOMPOSING (Phase3): A6+A7 parallel → A8 → Gate2
+        if state == RS.DECOMPOSING:
+            await self._run_phase3_subflow(req_id, wf_id, ctx)
+            return
+
         if state == RS.DESIGNING:
             # DESIGNING: dispatch A3 only（用户通过 HTTP+SSE 确认后发布 agent.result.A3）
             # A3 确认后 Orchestrator 转换到 spec_writing → context.ready.A4
@@ -229,6 +243,203 @@ class RequirementWorkflow:
             # Single agent dispatch
             agent_id = self._agent_id_for_state(state)
             await self._dispatch_and_wait(req_id, agent_id, wf_id, context_str, timeout, ctx_meta=ctx)
+
+    # ── Phase3 sub-flow (DECOMPOSING) ─────────────────────────────────
+
+    async def _run_phase3_subflow(self, req_id: str, wf_id: str, ctx: dict):
+        """Phase3 DECOMPOSING sub-flow: A6+A7 parallel → GATHER → A8 → Gate2.
+
+        GATHER logic: A6+A7 both complete → dispatch A8
+        Gate2 reject: tech_prep_revision_count += 1, re-dispatch A6+A7
+        Gate2 pass: advance to DEVELOPING
+        """
+        max_phase3_revisions = 5  # safety limit for Gate2 reject loops
+
+        while self._tech_prep_revision_count < max_phase3_revisions:
+            # Reset GATHER tracking
+            self._a6_done = False
+            self._a7_done = False
+            self._a6_result = None
+            self._a7_result = None
+            self._a8_done = False
+            self._a8_result = None
+
+            workflow.logger.info(
+                "Phase3 sub-flow start req=%s revision=%d",
+                req_id, self._tech_prep_revision_count,
+            )
+
+            # Update DB: tech_prep_status = 'decomposing'
+            await self._update_phase3_status(req_id, "decomposing")
+
+            # ── Phase 3a: Dispatch A6 + A7 in parallel ─────────────
+            await self.report_status(req_id, "running",
+                "Phase3: 并行调度 A6+A7 (revision=%d)" % self._tech_prep_revision_count)
+
+            # Build revision_context for rework
+            revision_context = {}
+            if self._tech_prep_revision_count > 0:
+                revision_context = {
+                    "is_revision": True,
+                    "tech_prep_revision_count": self._tech_prep_revision_count,
+                    "gate2_rejection": getattr(self, '_gate2_rejection', {}),
+                    "previous_a8_report": getattr(self, '_previous_a8_report', {}),
+                }
+
+            # Dispatch A6
+            a6_ctx = await workflow.execute_activity(
+                build_context,
+                args=[req_id, "decomposing", "A6", revision_context],
+                start_to_close_timeout=timedelta(seconds=60),
+                retry_policy=_DEFAULT_RETRY,
+            )
+            await workflow.execute_activity(
+                dispatch_agent,
+                args=[req_id, "decomposing", "A6", wf_id, str(a6_ctx),
+                      revision_context, a6_ctx],
+                start_to_close_timeout=timedelta(seconds=30),
+                retry_policy=_DEFAULT_RETRY,
+            )
+
+            # Dispatch A7 (dag_preview.dag_available=false for first dispatch)
+            a7_ctx = await workflow.execute_activity(
+                build_context,
+                args=[req_id, "decomposing", "A7", revision_context],
+                start_to_close_timeout=timedelta(seconds=60),
+                retry_policy=_DEFAULT_RETRY,
+            )
+            await workflow.execute_activity(
+                dispatch_agent,
+                args=[req_id, "decomposing", "A7", wf_id, str(a7_ctx),
+                      revision_context, a7_ctx],
+                start_to_close_timeout=timedelta(seconds=30),
+                retry_policy=_DEFAULT_RETRY,
+            )
+
+            # ── GATHER: Wait for A6+A7 both complete ──────────────
+            gather_timeout = timedelta(minutes=15)
+            gather_deadline = workflow.now() + gather_timeout
+
+            await workflow.wait_condition(
+                lambda: (self._a6_done and self._a7_done)
+                         or workflow.now() >= gather_deadline,
+            )
+
+            if not self._a6_done or not self._a7_done:
+                workflow.logger.warning(
+                    "Phase3 GATHER timeout req=%s (a6=%s a7=%s)",
+                    req_id, self._a6_done, self._a7_done,
+                )
+                # Update status based on partial completion
+                if self._a6_done and not self._a7_done:
+                    await self._update_phase3_status(req_id, "decomposed")
+                elif self._a7_done and not self._a6_done:
+                    await self._update_phase3_status(req_id, "test_ready")
+                # Wait longer for remaining agent
+                extra_deadline = workflow.now() + timedelta(minutes=10)
+                await workflow.wait_condition(
+                    lambda: (self._a6_done and self._a7_done)
+                             or workflow.now() >= extra_deadline,
+                )
+                if not (self._a6_done and self._a7_done):
+                    workflow.logger.error(
+                        "Phase3 GATHER extended timeout req=%s — blocking",
+                        req_id,
+                    )
+                    await self._transition(req_id, RS.BLOCKED,
+                                           {"reason": "phase3_gather_timeout"})
+                    return
+
+            # ── Phase 3b: Dispatch A8 ──────────────────────────────
+            await self._update_phase3_status(req_id, "reviewing")
+
+            await self.report_status(req_id, "running",
+                "Phase3: 调度 A8 架构评审")
+
+            # Build A8 context with DAG from A6 result
+            a8_revision_context = revision_context.copy()
+            a8_ctx = await workflow.execute_activity(
+                build_context,
+                args=[req_id, "decomposing", "A8", a8_revision_context],
+                start_to_close_timeout=timedelta(seconds=60),
+                retry_policy=_DEFAULT_RETRY,
+            )
+            await workflow.execute_activity(
+                dispatch_agent,
+                args=[req_id, "decomposing", "A8", wf_id, str(a8_ctx),
+                      a8_revision_context, a8_ctx],
+                start_to_close_timeout=timedelta(seconds=30),
+                retry_policy=_DEFAULT_RETRY,
+            )
+
+            # Wait for A8
+            a8_timeout = timedelta(minutes=10)
+            a8_deadline = workflow.now() + a8_timeout
+
+            await workflow.wait_condition(
+                lambda: self._a8_done or workflow.now() >= a8_deadline,
+            )
+
+            if not self._a8_done:
+                workflow.logger.warning("A8 timeout req=%s — proceeding to Gate2 without A8", req_id)
+                # Store partial A8 result for Gate2 review
+                self._a8_result = {"status": "timeout", "review": {
+                    "verdict": "fail", "score": 0,
+                    "gate2_required": True,
+                    "summary": "A8 架构评审超时",
+                }}
+
+            # ── Phase 3c: Gate2 approval ────────────────────────────
+            await self._run_gate_stage(req_id, 2)
+
+            # Check Gate2 decision
+            if getattr(self, '_gate_decision_reject', False):
+                # Gate2 reject: tech_prep_revision_count += 1, loop back
+                self._tech_prep_revision_count += 1
+                self._gate_decision_reject = False
+
+                # Save rejection info for next iteration's revision_context
+                self._gate2_rejection = {
+                    "reject_reasons": getattr(self, '_gate_reject_reasons', []),
+                    "revision_guidance": getattr(self, '_gate_revision_guidance', ""),
+                }
+                if self._a8_result:
+                    self._previous_a8_report = self._a8_result.get("review", {})
+
+                workflow.logger.info(
+                    "Gate2 reject req=%s revision=%d — re-entering Phase3",
+                    req_id, self._tech_prep_revision_count,
+                )
+                await self._update_phase3_status(req_id, "revising")
+                continue  # loop back to Phase 3a
+
+            # Gate2 pass: advance
+            await self._update_phase3_status(req_id, "tech_prep_completed")
+            workflow.logger.info(
+                "Phase3 complete req=%s (revisions=%d)",
+                req_id, self._tech_prep_revision_count,
+            )
+            return  # exit sub-flow, workflow will transition to DEVELOPING
+
+        # Safety limit reached
+        workflow.logger.error(
+            "Phase3 revision limit reached req=%s — blocking",
+            req_id,
+        )
+        await self._transition(req_id, RS.BLOCKED,
+                               {"reason": "phase3_revision_limit"})
+
+    async def _update_phase3_status(self, req_id: str, tech_prep_status: str):
+        """Update requirements.tech_prep_status in DB."""
+        await workflow.execute_activity(
+            notify_mc,
+            args=[req_id, self._state.value, self._state.value,
+                  {"event": "tech_prep_status_update",
+                   "tech_prep_status": tech_prep_status,
+                   "tech_prep_revision_count": self._tech_prep_revision_count}],
+            start_to_close_timeout=timedelta(seconds=30),
+            retry_policy=_DEFAULT_RETRY,
+        )
 
     async def _run_designing_parallel(
         self, req_id: str, wf_id: str, context_str: str, timeout: timedelta,
@@ -506,11 +717,20 @@ class RequirementWorkflow:
             self._agent_result_a3 = result
         elif agent_id == "A4":
             self._agent_result_a4 = result
+        elif agent_id == "A6":
+            self._a6_done = True
+            self._a6_result = result
+        elif agent_id == "A7":
+            self._a7_done = True
+            self._a7_result = result
+        elif agent_id == "A8":
+            self._a8_done = True
+            self._a8_result = result
         elif agent_id == self._agent_id_expected:
             self._agent_result = result
         else:
             workflow.logger.warning(
-                "Ignored agent_completed from %s (expected %s or A3/A4)",
+                "Ignored agent_completed from %s (expected %s or A3/A4/A6/A7/A8)",
                 agent_id, self._agent_id_expected,
             )
 
