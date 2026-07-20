@@ -1,10 +1,9 @@
-﻿# A7 测试用例生成 Agent — 完整设计文档
+# A7 测试用例生成 Agent — 完整设计文档
 
 ## 文档信息
 - **版本**: v1.0
 - **日期**: 2026-07-15
-- **状态**: 完整设计文档（从阶段三-完整设计 §4 + 数据字典 + 开发设计 + 测试设计提取）
-- **参考**: [阶段三 数据字典](./阶段三-数据字典.md) · [阶段三 完整设计](./阶段三-完整设计.md) · [系统状态机与信息流设计](../系统架构/系统状态机与信息流设计.md)
+- **状态**: 完整设计文档
 - **说明**: A7 负责阶段三的测试用例生成，在 Gate1 通过后与 A6 并行启动，基于 Spec + API 契约生成测试用例骨架（单测/集成/E2E）。**本文档中所有数据结构、字段名、枚举值以阶段三数据字典为准。**
 
 ---
@@ -28,7 +27,7 @@ A7 采用**纯 NATS 调度**模型（与 A2/A4/A5/A6 同构）：
                                     └──────────────┘
 ``
 
-- **NATS**：接收 Orchestrator 调度（context.ready.A7），发布完成结果（gent.result.A7）和测试资产就绪事件（	est.assets_ready）
+- **NATS**：接收 Orchestrator 调度（context.ready.A7），发布完成结果（agent.result.A7）和测试资产就绪事件（test.assets_ready）
 - **LLM**：A7 内部通过 DeepSeek API 执行测试用例生成
 - A7 不与用户直接交互，无 HTTP 接口
 
@@ -88,8 +87,8 @@ P1：A7 接收 dag_preview 补充 DAG 节点覆盖映射
 1. **NATS 驱动**：完全由 Orchestrator 调度，不自行决定启动时机
 2. **P0 不等待 DAG**：A7 与 A6 完全并行，不依赖 A6 的 DAG 产出
 3. **LLM 主路径 + Fallback 备路径**：LLM 正常走主路径（temperature=0.2），失败自动切换 fallback
-4. **产物自持久化**：执行完成后写入 	est_assets（新表）+ gent_results (agent_key='A7')
-5. **双事件发布**：gent.result.A7（Orchestrator 编排）+ 	est.assets_ready（A11/下游消费）
+4. **产物自持久化**：执行完成后写入 test_assets（新表）+ agent_results (agent_key='A7')
+5. **双事件发布**：agent.result.A7（Orchestrator 编排）+ test.assets_ready（A11/下游消费）
 6. **幂等写入**：同一 (req_id, agent_key, cycle) 使用 UPSERT
 7. **范围收敛**：A7 只到 Gate2
 
@@ -184,14 +183,14 @@ def _fallback_generate(spec_package: dict) -> list:
 
 #### 阶段 4 — 用例组织
 
-用例按以下维度组织后写入 	est_assets：
+用例按以下维度组织后写入 test_assets：
 
 | 维度 | 值 | 说明 |
 |------|-----|------|
-| 	ype | unit/integration/e2e/isual/pi | 测试类型 |
+| type | unit/integration/e2e/visual/api | 测试类型 |
 | priority | P0/P1/P2 | 优先级 |
 | module | Spec 模块名 | 归属模块 |
-| 	ags | 自由标签数组 | 含 uto/smoke/exception 等 |
+| tags | 自由标签数组 | 含 auto/smoke/exception 等 |
 
 #### 阶段 5 — 持久化
 
@@ -227,14 +226,14 @@ async def _persist_results(req_id, session_id, cycle, test_cases, source="llm"):
 
 ## 五、产出物
 
-A7 产出分别存入 	est_assets 表和 gent_results 表：
+A7 产出分别存入 test_assets 表和 agent_results 表：
 
 | 产物 | 存储位置 | 说明 |
 |------|---------|------|
-| 	est_cases | 	est_assets | 完整测试用例数组（按 type/priority/module 分类） |
-| case_count | 	est_assets / gent_results.A7 | 用例总数 |
-| source | 	est_assets / gent_results.A7 | 产出来源：llm / allback |
-| dag_coverage | gent_results.A7.artifact | DAG 节点覆盖比例（P1） |
+| test_cases | test_assets | 完整测试用例数组（按 type/priority/module 分类） |
+| case_count | test_assets / agent_results.A7 | 用例总数 |
+| source | test_assets / agent_results.A7 | 产出来源：llm / fallback |
+| dag_coverage | agent_results.A7.artifact | DAG 节点覆盖比例（P1） |
 
 ### 测试用例结构
 
@@ -291,15 +290,15 @@ A7 产出分别存入 	est_assets 表和 gent_results 表：
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|:--:|------|
 | id | string | ✅ | 唯一标识，格式 TC-{module}-{NNN} |
-| 	itle | string | ✅ | 格式 [{模块}] {场景描述} |
-| 	ype | enum | ✅ | unit/integration/e2e/isual/pi |
+| title | string | ✅ | 格式 [{模块}] {场景描述} |
+| type | enum | ✅ | unit/integration/e2e/visual/api |
 | priority | enum | ✅ | P0/P1/P2 |
 | module | string | ✅ | 归属模块名（对应 Spec modules） |
 | preconditions | string[] | ✅ | 前置条件列表 |
 | steps | object[] | ✅ | {action, expected} 步骤列表 |
-| 	ags | string[] | ✅ | 标签，必须包含 uto |
+| tags | string[] | ✅ | 标签，必须包含 auto |
 | estimated_duration_ms | int | | 预估执行时长（毫秒） |
-| source | string | | llm / allback |
+| source | string | | llm / fallback |
 
 ### P1：DAG 覆盖映射
 
@@ -369,7 +368,7 @@ A7 产出分别存入 	est_assets 表和 gent_results 表：
 }
 ``
 
-> 	est.assets_ready 是 A7 成果的广播事件，供给 A11（自动化测试）等下游消费者订阅。
+> test.assets_ready 是 A7 成果的广播事件，供给 A11（自动化测试）等下游消费者订阅。
 
 ---
 
@@ -385,17 +384,17 @@ A7 产出分别存入 	est_assets 表和 gent_results 表：
 
 | 表 | 操作 | 说明 |
 |----|------|------|
-| 	est_assets | INSERT | 每次执行新增一行 |
-| gent_results | UPSERT | 同一 (req_id, agent_key='A7', cycle) 覆盖 |
+| test_assets | INSERT | 每次执行新增一行 |
+| agent_results | UPSERT | 同一 (req_id, agent_key='A7', cycle) 覆盖 |
 
 ### 7.3 降级策略
 
 | 场景 | 行为 | source 标记 |
 |------|------|------------|
-| DeepSeek API 不可用 | 回退到模板规则生成（每模块 2 条基础用例） | allback |
-| DeepSeek 返回格式异常 | JSON 解析失败 → 回退 fallback | allback |
+| DeepSeek API 不可用 | 回退到模板规则生成（每模块 2 条基础用例） | fallback |
+| DeepSeek 返回格式异常 | JSON 解析失败 → 回退 fallback | fallback |
 | test_assets 写入失败 | 重试 3 次（30s 间隔）→ 仅写入 agent_results | — |
-| A7 总体超时（10 分钟） | Orchestrator 重试 1 次 → a7_missing=true | 	imeout |
+| A7 总体超时（10 分钟） | Orchestrator 重试 1 次 → a7_missing=true | timeout |
 
 ---
 
@@ -404,8 +403,8 @@ A7 产出分别存入 	est_assets 表和 gent_results 表：
 | 事件 | 方向 | 触发时机 | Nats-Msg-Id 格式 |
 |------|------|---------|-----------------|
 | context.ready.A7 | Orchestrator → A7 | Gate1 pass / Gate2 拒绝 | {req_id}-context.ready.A7-{cycle} |
-| gent.result.A7 | A7 → Orchestrator | 测试用例持久化完成 | {req_id}-agent.result.A7-{cycle} |
-| 	est.assets_ready | A7 → 广播 | 测试用例持久化完成 | {req_id}-test.assets_ready-{cycle} |
+| agent.result.A7 | A7 → Orchestrator | 测试用例持久化完成 | {req_id}-agent.result.A7-{cycle} |
+| test.assets_ready | A7 → 广播 | 测试用例持久化完成 | {req_id}-test.assets_ready-{cycle} |
 
 ### Consumer 配置
 
@@ -446,12 +445,12 @@ A7 产出分别存入 	est_assets 表和 gent_results 表：
 | 标题可读 | 格式 [{模块}] {场景} — {预期}，≤80 字符 |
 | 前置明确 | 前置条件列表化，不含模糊描述 |
 | 步骤可执行 | 每步含具体 action + 可验证 expected |
-| 标签规范 | 必含 uto，模块标签取 Spec module name |
+| 标签规范 | 必含 auto，模块标签取 Spec module name |
 | source 标记 | llm / fallback 明确区分 |
 
 ### 10.3 A11 兼容性
 
-- 所有 uto 标签用例可被 A11 直接订阅执行
+- 所有 auto 标签用例可被 A11 直接订阅执行
 - steps[].action 使用结构化描述，A11 解析为测试执行指令
 - preconditions 由 A11 在测试 setup 阶段自动执行
 
@@ -461,7 +460,7 @@ A7 产出分别存入 	est_assets 表和 gent_results 表：
 
 ### Phase 1：核心生成（Day 1-2）
 - A7 Agent 核心流水线：上下文解析 → LLM 生成 → 用例组织 → 持久化
-- 	est_assets 表（阶段二已预建，阶段三规范化）
+- test_assets 表（阶段二已预建，阶段三规范化）
 - DeepSeek API 集成 + prompt 模板
 
 ### Phase 2：Fallback + 修订（Day 3-4）
@@ -481,14 +480,14 @@ A7 产出分别存入 	est_assets 表和 gent_results 表：
 | 维度 | 内容 |
 |------|------|
 | **入口** | context.ready.A7（Gate1 pass 并行 / Gate2 拒绝） |
-| **出口** | gent.result.A7（Orchestrator 编排）+ 	est.assets_ready（下游广播） |
+| **出口** | agent.result.A7（Orchestrator 编排）+ test.assets_ready（下游广播） |
 | **核心产物** | 分类测试用例（unit/integration/e2e/visual/api）× 模块 |
-| **产物存储** | 	est_assets（每次新增）+ gent_results（A7, cycle UPSERT） |
+| **产物存储** | test_assets（每次新增）+ agent_results（A7, cycle UPSERT） |
 | **交互模式** | 纯 NATS 调度，无用户交互 |
 | **LLM 策略** | DeepSeek API（temperature=0.2），失败回退 fallback 规则生成 |
 | **修订机制** | Gate2 拒绝 → 注入 revision_context，同 cycle 覆盖 |
 | **并行关系** | 与 A6 并行启动，P0 不等待 DAG；P1 可接收 dag_preview 补充覆盖 |
-| **下游消费** | A11 订阅 	est.assets_ready 获取可执行测试资产 |
+| **下游消费** | A11 订阅 test.assets_ready 获取可执行测试资产 |
 
 ---
 

@@ -3,8 +3,7 @@
 ## 文档信息
 - **版本**: v1.0
 - **日期**: 2026-07-15
-- **状态**: 完整设计文档（从阶段三-完整设计 §3 + 数据字典 + 开发设计 + 测试设计提取）
-- **参考**: [阶段三 数据字典](./阶段三-数据字典.md) · [阶段三 完整设计](./阶段三-完整设计.md) · [系统状态机与信息流设计](../系统架构/系统状态机与信息流设计.md)
+- **状态**: 完整设计文档
 - **说明**: A6 负责阶段三的 Spec 拆解，在 Gate1 通过后与 A7 并行启动，将终版 Spec 拆解为可执行的任务 DAG。**本文档中所有数据结构、字段名、枚举值以阶段三数据字典为准。**
 
 ---
@@ -28,7 +27,7 @@ A6 采用**纯 NATS 调度**模型（与 A2/A4/A5 同构）：
                                     └──────────────┘
 ``
 
-- **NATS**：接收 Orchestrator 调度（context.ready.A6），发布完成结果（gent.result.A6）和 DAG 广播事件（dag.created）
+- **NATS**：接收 Orchestrator 调度（context.ready.A6），发布完成结果（agent.result.A6）和 DAG 广播事件（dag.created）
 - **LLM**：A6 内部通过 DeepSeek API 执行 Spec 拆解
 - A6 不与用户直接交互，无 HTTP 接口
 
@@ -89,8 +88,8 @@ A6↔A8 对抗（P1）
 
 1. **NATS 驱动**：完全由 Orchestrator 调度，不自行决定启动时机
 2. **LLM 主路径 + Fallback 备路径**：LLM 正常走主路径（temperature=0.2），失败自动切换 fallback
-3. **产物自持久化**：执行完成后写入 	ask_dags（新表）+ gent_results (agent_key='A6')
-4. **双事件发布**：gent.result.A6（Orchestrator 编排）+ dag.created（A8/下游消费）
+3. **产物自持久化**：执行完成后写入 task_dags（新表）+ agent_results (agent_key='A6')
+4. **双事件发布**：agent.result.A6（Orchestrator 编排）+ dag.created（A8/下游消费）
 5. **幂等写入**：同一 (req_id, agent_key, cycle) 使用 UPSERT（Gate2 打回后覆盖）
 6. **范围收敛**：A6 只到 Gate2
 
@@ -222,17 +221,17 @@ async def _persist_results(req_id, session_id, cycle, dag, source):
 
 ## 五、产出物
 
-A6 产出分别存入 	ask_dags 表和 gent_results 表：
+A6 产出分别存入 task_dags 表和 agent_results 表：
 
 | 产物 | 存储位置 | 说明 |
 |------|---------|------|
-| dag_json | 	ask_dags | 完整 DAG JSON（nodes + edges + critical_path + parallel_groups） |
+| dag_json | task_dags | 完整 DAG JSON（nodes + edges + critical_path + parallel_groups） |
 | 
-ode_count | 	ask_dags | 节点数量 |
-| source | 	ask_dags | 产出来源：llm / allback |
-| stage3_revision_count | 	ask_dags | A6↔A8 对抗轮次计数（Gate2 打回后重置） |
-| dag | gent_results.A6.artifact | DAG 快照（用于 Gate2 上下文组装） |
-| dag_id | gent_results.A6.artifact | 关联 task_dags 记录 |
+ode_count | task_dags | 节点数量 |
+| source | task_dags | 产出来源：llm / fallback |
+| stage3_revision_count | task_dags | A6↔A8 对抗轮次计数（Gate2 打回后重置） |
+| dag | agent_results.A6.artifact | DAG 快照（用于 Gate2 上下文组装） |
+| dag_id | agent_results.A6.artifact | 关联 task_dags 记录 |
 
 ### DAG JSON 结构
 
@@ -273,17 +272,15 @@ ode_count | 	ask_dags | 节点数量 |
 
 ### 6.1 输入：context.ready.A6
 
-完整结构见 [数据字典 §5](./阶段三-数据字典.md#五context-事件-payload)。
+完整结构见 [数据字典 §4.3](./阶段三-数据字典.md#43-nats-事件)。
 
 | 字段 | 来源 | 说明 |
 |------|------|------|
-| 
-eq_id | 路由键 | 需求 ID |
+| req_id | 路由键 | 需求 ID |
 | session_id | 路由键 | 会话 ID |
 | cycle | 路由键 | 当前 cycle |
 | spec_package | Orchestrator 组装 | spec_doc + openapi_schema + erd_diagram + ddl_statements |
-| 
-evision_context | Gate2 拒绝/A8 对抗 | is_revision + gate2_rejection + a8_report |
+| revision_context | Gate2 拒绝/A8 对抗 | is_revision + gate2_rejection + a8_report |
 
 ### 6.2 输出：agent.result.A6
 
@@ -335,18 +332,18 @@ evision_context | Gate2 拒绝/A8 对抗 | is_revision + gate2_rejection + a8_re
 
 | 表 | 操作 | 说明 |
 |----|------|------|
-| 	ask_dags | INSERT | 每次执行新增一行（version 递增） |
-| gent_results | UPSERT | 同一 (req_id, agent_key='A6', cycle) 覆盖 |
+| task_dags | INSERT | 每次执行新增一行（version 递增） |
+| agent_results | UPSERT | 同一 (req_id, agent_key='A6', cycle) 覆盖 |
 
 ### 7.3 降级策略
 
 | 场景 | 行为 | source 标记 |
 |------|------|------------|
-| DeepSeek API 不可用 | 回退到关键词规则拆解 | allback |
-| DeepSeek 返回格式异常 | JSON 解析失败 → 回退 fallback | allback |
-| DAG 验证失败（节点数越界/自环） | 回退到 fallback | allback |
+| DeepSeek API 不可用 | 回退到关键词规则拆解 | fallback |
+| DeepSeek 返回格式异常 | JSON 解析失败 → 回退 fallback | fallback |
+| DAG 验证失败（节点数越界/自环） | 回退到 fallback | fallback |
 | task_dags 写入失败 | 重试 3 次（30s 间隔）→ 仅写入 agent_results | — |
-| A6 总体超时（10 分钟） | Orchestrator 重试 1 次 → a6_missing=true | 	imeout |
+| A6 总体超时（10 分钟） | Orchestrator 重试 1 次 → a6_missing=true | timeout |
 
 ---
 
@@ -355,7 +352,7 @@ evision_context | Gate2 拒绝/A8 对抗 | is_revision + gate2_rejection + a8_re
 | 事件 | 方向 | 触发时机 | Nats-Msg-Id 格式 |
 |------|------|---------|-----------------|
 | context.ready.A6 | Orchestrator → A6 | Gate1 pass / Gate2 拒绝 / A8 对抗 | {req_id}-context.ready.A6-{cycle} |
-| gent.result.A6 | A6 → Orchestrator | DAG 持久化完成 | {req_id}-agent.result.A6-{cycle} |
+| agent.result.A6 | A6 → Orchestrator | DAG 持久化完成 | {req_id}-agent.result.A6-{cycle} |
 | dag.created | A6 → 广播 | DAG 持久化完成 | {req_id}-dag.created-{cycle} |
 
 ### Consumer 配置
@@ -389,13 +386,13 @@ evision_context | Gate2 拒绝/A8 对抗 | is_revision + gate2_rejection + a8_re
 
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|:--:|------|
-| id | string | ✅ | 唯一标识，格式 	ask-NN |
-| 	ype | enum | ✅ | planning/ackend/rontend/database/integration/	esting/deployment |
-| 	itle | string | ✅ | 简短标题 |
+| id | string | ✅ | 唯一标识，格式 task-NN |
+| type | enum | ✅ | planning/backend/frontend/database/integration/testing/deployment |
+| title | string | ✅ | 简短标题 |
 | description | string | ✅ | 任务详细描述 |
 | complexity | enum | ✅ | low/medium/high |
 | estimated_hours | float | ✅ | 预估工时（小时） |
-| gent | string | | 执行 Agent（默认 A9） |
+| agent | string | | 执行 Agent（默认 A9） |
 | steps | string[] | | 子步骤列表 |
 | 
 eeds_human_review | bool | | complexity=high 自动标记 true |
@@ -404,8 +401,8 @@ eeds_human_review | bool | | complexity=high 自动标记 true |
 
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|:--:|------|
-| rom | string | ✅ | 源节点 id |
-| 	o | string | ✅ | 目标节点 id |
+| from | string | ✅ | 源节点 id |
+| to | string | ✅ | 目标节点 id |
 | dependency_type | enum | ✅ | sequential/conditional/parallel |
 
 ### 10.3 复杂节点人工介入标记
@@ -421,7 +418,7 @@ eeds_human_review = true
 
 ### Phase 1：核心拆解（Day 1-2）
 - A6 Agent 核心流水线：上下文解析 → LLM 拆解 → DAG 验证 → 持久化
-- 	ask_dags 表 Migration SQL 执行
+- task_dags 表 Migration SQL 执行
 - DeepSeek API 集成 + prompt 模板
 
 ### Phase 2：Fallback + 修订（Day 3-4）
@@ -441,9 +438,9 @@ eeds_human_review = true
 | 维度 | 内容 |
 |------|------|
 | **入口** | context.ready.A6（Gate1 pass 并行 / Gate2 拒绝 / A8 对抗） |
-| **出口** | gent.result.A6（Orchestrator 编排）+ dag.created（下游广播） |
+| **出口** | agent.result.A6（Orchestrator 编排）+ dag.created（下游广播） |
 | **核心产物** | 任务 DAG（nodes + edges + critical_path + parallel_groups） |
-| **产物存储** | 	ask_dags（每次新增版本）+ gent_results（A6, cycle UPSERT） |
+| **产物存储** | task_dags（每次新增版本）+ agent_results（A6, cycle UPSERT） |
 | **交互模式** | 纯 NATS 调度，无用户交互 |
 | **LLM 策略** | DeepSeek API（temperature=0.2），失败回退 fallback 规则拆解 |
 | **修订机制** | Gate2 拒绝 → 注入 revision_context，同 cycle 覆盖；A8 对抗 → 注入 a8_suggestions |

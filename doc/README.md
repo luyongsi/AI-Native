@@ -3,7 +3,7 @@
 ## 📂 目录结构
 
 ### 📘 系统架构（当前有效）
-- `系统状态机与信息流设计.md` — **权威基线 v2.4**，全流程 Mermaid 图、Agent/Gate 节点定义、33 事件协议
+- `系统架构/系统状态机与信息流设计.md` — **权威基线 v2.4**，全流程 Mermaid 图、Agent/Gate 节点定义、33 事件协议
 - `系统架构/AI-Native研发协同系统-04-Agent协作与触发机制详规.md` — Agent 协作与触发机制
 - `系统架构/Agent数据流架构.md` — Agent 数据流与编排架构
 - `系统架构/Orchestrator完整规格.md` — Orchestrator 状态机、五层上下文、分层压缩
@@ -12,9 +12,9 @@
 
 ### 🤖 Agent规格
 - `Agent规格/A1-需求分析Agent完整设计.md` — A1 需求分析（多轮对话、验收标准、线框图）
-- `Agent规格/A2-知识分析Agent规格.md` — A2 知识分析（知识库检索、可行性评估）
-- `Agent规格/A9-开发Agent实现说明.md` — A9 代码开发（Claude Code SDK、双脑架构）
-- `Agent规格/A10-CI-CD-Agent改造规格.md` — A10 CI/CD部署（NATS+MCP双模式）
+- `Agent规格/A2-知识分析Agent完整设计.md` — A2 知识分析（知识库检索、可行性评估）
+- `Agent规格/A9-开发Agent完整设计.md` — A9 代码开发（Claude Code SDK、双脑架构）
+- `Agent规格/A10-CI-CD-Agent完整设计.md` — A10 CI/CD部署（NATS+MCP双模式）
 - `Agent规格/README.md` — 全部 Agent 状态清单与编写优先级
 
 ### 📦 部署文档

@@ -595,7 +595,7 @@ jinja2>=3.1.0        # Pipeline 配置模板渲染
 ---
 
 **附录**：
-- [A9 Dev Agent 部署文档](../../deploy/a9-dev-agent-deployment.md)
-- [BaseAgentWorker 架构说明](../系统架构/BaseAgentWorker架构.md)
-- [NATS 事件总线设计](../系统架构/NATS事件总线.md)
-- [MCP Gateway API 文档](../../mcp-gateway/README.md)
+- [A9 Dev Agent 部署文档](../部署文档/deploy/a9-dev-agent-deployment.md)
+- [系统状态机与信息流设计](../系统架构/系统状态机与信息流设计.md)
+- [NATS 通信层修复规格](../系统架构/NATS通信层修复规格.md)
+- [MCP Gateway README](../../repos/mcp-gateway/README.md)
