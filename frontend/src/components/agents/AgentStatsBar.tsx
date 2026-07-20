@@ -39,14 +39,14 @@ export default function AgentStatsBar({
   const error = agents.filter((a) => a.status === 'error').length;
 
   return (
-    <div className="flex items-center gap-4 mb-4 text-xs text-slate-500 flex-shrink-0">
+    <div className="flex items-center gap-4 mb-4 text-xs text-slate-400 flex-shrink-0">
       <span>
         活跃:{' '}
-        <strong className="text-slate-700">{running}</strong>
+        <strong className="text-slate-600">{running}</strong>
       </span>
       <span>
         空闲:{' '}
-        <strong className="text-slate-700">{idle}</strong>
+        <strong className="text-slate-600">{idle}</strong>
       </span>
       <span className="text-red-500">
         异常: <strong>{error}</strong>
@@ -63,7 +63,7 @@ export default function AgentStatsBar({
               className={`text-[10px] px-2 py-1 rounded-lg transition-colors ${
                 priorityFilter === f
                   ? 'bg-slate-900 text-white'
-                  : 'text-slate-500 hover:bg-slate-100'
+                  : 'text-slate-400 hover:bg-slate-700'
               }`}
             >
               {priorityLabels[f]}
@@ -81,7 +81,7 @@ export default function AgentStatsBar({
             className={`text-[10px] px-2 py-1 rounded-lg transition-colors ${
               agentFilter === f
                 ? 'bg-slate-900 text-white'
-                : 'text-slate-500 hover:bg-slate-100'
+                : 'text-slate-400 hover:bg-slate-700'
             }`}
           >
             {filterLabels[f]}

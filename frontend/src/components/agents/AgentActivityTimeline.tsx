@@ -16,7 +16,7 @@ const typeColors: Record<string, string> = {
   think: 'text-purple-600 bg-purple-50 border-purple-100',
   tool_call: 'text-blue-600 bg-blue-50 border-blue-100',
   code_gen: 'text-emerald-600 bg-emerald-50 border-emerald-100',
-  commit: 'text-slate-600 bg-slate-100 border-slate-200',
+  commit: 'text-slate-400 bg-slate-700 border-slate-700',
   test: 'text-cyan-600 bg-cyan-50 border-cyan-100',
   error: 'text-red-600 bg-red-50 border-red-100',
   wait: 'text-amber-600 bg-amber-50 border-amber-100',
@@ -49,13 +49,13 @@ export default function AgentActivityTimeline({ activities, onViewDiff, compact 
             <div className="flex-1 flex items-start gap-2 min-w-0">
               <span
                 className={`text-[10px] font-medium px-1.5 py-0.5 rounded border flex-shrink-0 ${
-                  typeColors[act.type] || 'text-slate-500 bg-slate-50 border-slate-100'
+                  typeColors[act.type] || 'text-slate-400 bg-slate-800/50 border-slate-800'
                 }`}
               >
                 {typeLabels[act.type] || act.type}
               </span>
               <div className="min-w-0">
-                <span className="text-xs text-slate-700">{act.content}</span>
+                <span className="text-xs text-slate-600">{act.content}</span>
                 {act.detail && (
                   <span className="text-[10px] text-slate-400 ml-2">{act.detail}</span>
                 )}

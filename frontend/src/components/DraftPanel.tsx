@@ -54,7 +54,7 @@ export default function DraftPanel({ draft, confidenceScore, isStreaming }: Draf
     <div className="space-y-4 text-xs">
       {/* Header */}
       <div className="flex items-center justify-between">
-        <h3 className="font-semibold text-slate-800 text-sm">{draft.title || '未命名需求'}</h3>
+        <h3 className="font-semibold text-slate-200 text-sm">{draft.title || '未命名需求'}</h3>
         {confidenceScore != null && (
           <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${
             confidenceScore >= 0.8 ? 'bg-emerald-50 text-emerald-600' :
@@ -70,7 +70,7 @@ export default function DraftPanel({ draft, confidenceScore, isStreaming }: Draf
       {draft.description && (
         <div>
           <h4 className="text-[10px] font-medium text-slate-400 uppercase tracking-wider mb-1">概述</h4>
-          <p className="text-slate-600 leading-relaxed">{draft.description}</p>
+          <p className="text-slate-400 leading-relaxed">{draft.description}</p>
         </div>
       )}
 
@@ -78,7 +78,7 @@ export default function DraftPanel({ draft, confidenceScore, isStreaming }: Draf
       {draft.domain && (
         <div className="flex items-center gap-2">
           <span className="text-[10px] text-slate-400">领域:</span>
-          <span className="px-1.5 py-0.5 bg-slate-100 rounded text-slate-600 text-[10px]">
+          <span className="px-1.5 py-0.5 bg-slate-700 rounded text-slate-400 text-[10px]">
             {DOMAIN_LABELS[draft.domain] || draft.domain}
           </span>
         </div>
@@ -92,15 +92,15 @@ export default function DraftPanel({ draft, confidenceScore, isStreaming }: Draf
           </h4>
           <div className="space-y-2">
             {entities.map((entity, i) => (
-              <div key={i} className="bg-slate-50 rounded-lg p-2.5 border border-slate-100">
-                <span className="font-medium text-slate-700">{entity.name}</span>
+              <div key={i} className="bg-slate-800/50 rounded-lg p-2.5 border border-slate-800">
+                <span className="font-medium text-slate-600">{entity.name}</span>
                 {entity.description && (
                   <p className="text-[10px] text-slate-400 mt-0.5">{entity.description}</p>
                 )}
                 {entity.attributes && entity.attributes.length > 0 && (
                   <div className="flex flex-wrap gap-1 mt-1.5">
                     {entity.attributes.map((attr, j) => (
-                      <span key={j} className="px-1.5 py-0.5 bg-white rounded text-[10px] text-slate-500 border border-slate-100">
+                      <span key={j} className="px-1.5 py-0.5 bg-slate-800 rounded text-[10px] text-slate-400 border border-slate-800">
                         {attr}
                       </span>
                     ))}
@@ -120,8 +120,8 @@ export default function DraftPanel({ draft, confidenceScore, isStreaming }: Draf
           </h4>
           <ul className="space-y-1">
             {useCases.map((uc, i) => (
-              <li key={i} className="flex items-start gap-2 text-slate-600">
-                <span className="text-slate-300 mt-0.5">•</span>
+              <li key={i} className="flex items-start gap-2 text-slate-400">
+                <span className="text-slate-600 mt-0.5">•</span>
                 <span>{uc}</span>
               </li>
             ))}
@@ -151,8 +151,8 @@ export default function DraftPanel({ draft, confidenceScore, isStreaming }: Draf
           <h4 className="text-[10px] font-medium text-slate-400 uppercase tracking-wider mb-1">约束条件</h4>
           <ul className="space-y-0.5">
             {constraints.map((c, i) => (
-              <li key={i} className="flex items-start gap-2 text-slate-500 text-[10px]">
-                <span className="text-slate-300">•</span>
+              <li key={i} className="flex items-start gap-2 text-slate-400 text-[10px]">
+                <span className="text-slate-600">•</span>
                 {c}
               </li>
             ))}
@@ -177,9 +177,9 @@ export default function DraftPanel({ draft, confidenceScore, isStreaming }: Draf
 
       {/* Estimated Cost */}
       {draft.estimated_cost && (
-        <div className="flex items-center gap-2 pt-2 border-t border-slate-100">
+        <div className="flex items-center gap-2 pt-2 border-t border-slate-800">
           <span className="text-[10px] text-slate-400">预估工时:</span>
-          <span className="text-[10px] font-medium text-slate-700">{draft.estimated_cost}</span>
+          <span className="text-[10px] font-medium text-slate-600">{draft.estimated_cost}</span>
         </div>
       )}
 

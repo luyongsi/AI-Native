@@ -1,6 +1,18 @@
 import { create } from 'zustand';
+import { persist } from 'zustand/middleware';
 
-type PageView = 'dashboard' | 'requirements' | 'agents' | 'approvals' | 'releases' | 'insights' | 'alerts' | 'llm-calls' | 'workspace' | 'knowledge' | string;
+/** 应用页面标识 */
+export type PageView =
+  | 'dashboard'
+  | 'requirements'
+  | 'agents'
+  | 'approvals'
+  | 'releases'
+  | 'insights'
+  | 'alerts'
+  | 'llm-calls'
+  | 'testing'
+  | 'knowledge';
 
 interface AppStore {
   sidebarCollapsed: boolean;
@@ -15,15 +27,26 @@ interface AppStore {
   setNotificationPanelOpen: (open: boolean) => void;
 }
 
-export const useAppStore = create<AppStore>((set) => ({
-  sidebarCollapsed: false,
-  currentView: 'dashboard',
-  isDark: false,
-  toggleSidebar: () => set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),
-  setView: (view) => set({ currentView: view }),
-  toggleDark: () => set((s) => ({ isDark: !s.isDark })),
-  searchOpen: false,
-  setSearchOpen: (open) => set({ searchOpen: open }),
-  notificationPanelOpen: false,
-  setNotificationPanelOpen: (open) => set({ notificationPanelOpen: open }),
-}));
+export const useAppStore = create<AppStore>()(
+  persist(
+    (set) => ({
+      sidebarCollapsed: false,
+      currentView: 'dashboard',
+      isDark: true, // 默认暗色主题
+      toggleSidebar: () => set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),
+      setView: (view) => set({ currentView: view }),
+      toggleDark: () => set((s) => ({ isDark: !s.isDark })),
+      searchOpen: false,
+      setSearchOpen: (open) => set({ searchOpen: open }),
+      notificationPanelOpen: false,
+      setNotificationPanelOpen: (open) => set({ notificationPanelOpen: open }),
+    }),
+    {
+      name: 'ai-native-app-store',
+      partialize: (state) => ({
+        sidebarCollapsed: state.sidebarCollapsed,
+        isDark: state.isDark,
+      }),
+    }
+  )
+);

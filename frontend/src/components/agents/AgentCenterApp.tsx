@@ -81,7 +81,7 @@ export default function AgentCenterApp() {
     return (
       <div className="p-6 max-w-[1600px] mx-auto h-full flex flex-col">
         <div className="flex items-center justify-between mb-4 flex-shrink-0">
-          <h1 className="text-lg font-semibold text-slate-900">Agent 中心</h1>
+          <h1 className="text-lg font-semibold text-slate-100">Agent 中心</h1>
           <ViewSwitcher activeView={activeView} onViewChange={setActiveView} />
         </div>
         <div className="flex-1 flex items-center justify-center">
@@ -117,7 +117,7 @@ export default function AgentCenterApp() {
     return (
       <div className="p-6 max-w-[1600px] mx-auto h-full flex flex-col">
         <div className="flex items-center justify-between mb-4 flex-shrink-0">
-          <h1 className="text-lg font-semibold text-slate-900">Agent 中心</h1>
+          <h1 className="text-lg font-semibold text-slate-100">Agent 中心</h1>
           <ViewSwitcher activeView={activeView} onViewChange={setActiveView} />
         </div>
         <div className="flex-1 flex items-center justify-center">
@@ -138,7 +138,7 @@ export default function AgentCenterApp() {
             <span className="text-xs text-red-500">{error}</span>
             <button
               onClick={() => window.location.reload()}
-              className="text-xs px-3 py-1.5 bg-slate-100 hover:bg-slate-200 rounded-lg text-slate-600 transition-colors"
+              className="text-xs px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded-lg text-slate-400 transition-colors"
             >
               重试
             </button>
@@ -152,7 +152,7 @@ export default function AgentCenterApp() {
     <div className="p-6 max-w-[1600px] mx-auto h-full flex flex-col">
       {/* Header */}
       <div className="flex items-center justify-between mb-4 flex-shrink-0">
-        <h1 className="text-lg font-semibold text-slate-900">Agent 中心</h1>
+        <h1 className="text-lg font-semibold text-slate-100">Agent 中心</h1>
         <ViewSwitcher activeView={activeView} onViewChange={setActiveView} />
       </div>
 
@@ -180,7 +180,7 @@ export default function AgentCenterApp() {
                 selectedRequirementId={selectedRequirementId}
               />
             ) : (
-              <div className="flex-1 flex items-center justify-center text-xs text-slate-400 bg-white rounded-xl border border-slate-200">
+              <div className="flex-1 flex items-center justify-center text-xs text-slate-400 bg-slate-800 rounded-xl border border-slate-700">
                 暂无需求数据
               </div>
             )}
@@ -194,7 +194,7 @@ export default function AgentCenterApp() {
               onClose={() => setSelectedRequirementId(null)}
             />
           ) : (
-            <div className="flex-1 flex items-center justify-center text-xs text-slate-400 bg-white rounded-xl border border-slate-200">
+            <div className="flex-1 flex items-center justify-center text-xs text-slate-400 bg-slate-800 rounded-xl border border-slate-700">
               选择左侧需求查看 Agent 工作桌面
             </div>
           )}

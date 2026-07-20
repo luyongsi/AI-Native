@@ -31,14 +31,14 @@ function TopoNode({
   return (
     <div
       onClick={() => onClick?.(id)}
-      className="absolute bg-white border border-slate-200 rounded-xl px-3 py-2 shadow-sm hover:shadow-md hover:border-slate-300 transition-all cursor-pointer group"
+      className="absolute bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 shadow-sm hover:shadow-md hover:border-slate-500 transition-all cursor-pointer group"
       style={{ left: x - 60, top: y, width: 130 }}
     >
       <div className="flex items-center gap-1.5">
         <span
           className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${dotColors[status] || 'bg-slate-300'}`}
         />
-        <span className="text-[11px] font-medium text-slate-700 truncate">{label}</span>
+        <span className="text-[11px] font-medium text-slate-600 truncate">{label}</span>
       </div>
       {subtitle && <p className="text-[9px] text-slate-400 mt-0.5">{subtitle}</p>}
       {/* Hover action */}
@@ -58,7 +58,7 @@ export default function TopologyView({ onSelectNode }: TopologyViewProps) {
     <div className="flex-1 flex gap-4 min-h-0">
       {/* Main Topology Area */}
       <div
-        className="flex-1 bg-white rounded-xl border border-slate-200 relative overflow-auto"
+        className="flex-1 bg-slate-800 rounded-xl border border-slate-700 relative overflow-auto"
         style={{ minHeight: 600 }}
       >
         <div className="relative" style={{ width: 750, height: 600 }}>
@@ -139,7 +139,7 @@ export default function TopologyView({ onSelectNode }: TopologyViewProps) {
 
           {/* Legend */}
           <div
-            className="absolute bottom-4 left-4 flex flex-wrap items-center gap-x-4 gap-y-1 text-[10px] text-slate-400 bg-white/90 px-3 py-2 rounded-lg border border-slate-100"
+            className="absolute bottom-4 left-4 flex flex-wrap items-center gap-x-4 gap-y-1 text-[10px] text-slate-400 bg-slate-800/90 px-3 py-2 rounded-lg border border-slate-800"
             style={{ zIndex: 3 }}
           >
             <span className="flex items-center gap-1">
@@ -166,7 +166,7 @@ export default function TopologyView({ onSelectNode }: TopologyViewProps) {
       </div>
 
       {/* Selected Node Detail (placeholder) */}
-      <div className="w-64 bg-white rounded-xl border border-slate-200 p-4 flex-shrink-0">
+      <div className="w-64 bg-slate-800 rounded-xl border border-slate-700 p-4 flex-shrink-0">
         <p className="text-[10px] text-slate-400 text-center py-8">
           点击拓扑图中任意节点查看详情
         </p>

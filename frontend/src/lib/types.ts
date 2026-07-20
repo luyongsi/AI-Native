@@ -1,4 +1,4 @@
-// ============================================================
+﻿// ============================================================
 // Shared TypeScript interfaces matching backend API responses
 // Aligned with mock/index.ts types for seamless migration
 // ============================================================
@@ -50,6 +50,8 @@ export interface Requirement {
   relatedIds: string[];
   sourceType?: string;
   source_type?: string;
+  stage?: string;
+  type?: string;
   spec?: any;
   tasks?: any[];
 }
@@ -119,7 +121,7 @@ export interface ApprovalItem {
   reviewSummary?: string;
 }
 
-// Gate0 approval — aligned with new approvals table (migration 008)
+// Gate0 approval 鈥?aligned with new approvals table (migration 008)
 export interface Gate0Approval {
   id: string;
   req_id: string;
@@ -321,7 +323,7 @@ export interface ChatResponse {
   spec_updates?: any[];
 }
 
-// ── Dialogue (A1 HTTP+SSE) types ─────────────────────────────────────
+// 鈹€鈹€ Dialogue (A1 HTTP+SSE) types 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
 export interface DialogueEvent {
   type: 'thinking' | 'knowledge' | 'draft_update' | 'clarification' | 'wireframe' | 'done' | 'error';
@@ -347,6 +349,14 @@ export interface RequirementDraft {
   constraints: string[];
   risks: string[];
   estimated_cost: string | null;
+  // Extended fields for ArtifactPreview
+  overview?: string;
+  background?: string;
+  objectives?: string;
+  functional_requirements?: string;
+  non_functional_requirements?: string;
+  category?: string;
+  confidence?: number;
 }
 
 export interface DraftEntity {
@@ -359,6 +369,9 @@ export interface KnowledgeSource {
   name: string;
   count?: number;
   available?: boolean;
+  type?: string;       // doc | code | api | spec
+  title?: string;      // display title
+  relevance?: number;  // 0-1 relevance score
 }
 
 export interface ClarificationItem {
@@ -415,7 +428,7 @@ export interface DialogueCycle {
   draft_snapshot?: RequirementDraft | null;
 }
 
-// ── LLM Call Monitoring ─────────────────────────────────────────────
+// 鈹€鈹€ LLM Call Monitoring 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
 export interface LLMCallItem {
   call_id: string;
@@ -451,3 +464,8 @@ export interface LLMCallListResponse {
   limit: number;
   offset: number;
 }
+
+// E2E Pipeline types
+export interface E2EEvent { type: string; data: Record<string, any>; }
+export interface E2ERunResult { run_id: string; title: string; verdict: string; started_at: string; finished_at: string; steps: Record<string, any>; }
+

@@ -11,7 +11,7 @@ export default function DiffHunkRenderer({ hunk }: DiffHunkRendererProps) {
   return (
     <div>
       {/* Hunk header */}
-      <div className="bg-slate-100 text-slate-500 text-[10px] font-medium py-1 px-3 font-mono">
+      <div className="bg-slate-700 text-slate-400 text-[10px] font-medium py-1 px-3 font-mono">
         {hunk.header}
       </div>
       {/* Hunk lines */}

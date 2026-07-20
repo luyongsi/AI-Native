@@ -10,7 +10,7 @@ import AgentActionBar from './AgentActionBar';
 
 const statusConfig: Record<string, { color: string; label: string }> = {
   running: { color: 'text-emerald-600 bg-emerald-50', label: '运行中' },
-  idle: { color: 'text-slate-500 bg-slate-100', label: '空闲' },
+  idle: { color: 'text-slate-400 bg-slate-700', label: '空闲' },
   waiting: { color: 'text-amber-600 bg-amber-50', label: '等待中' },
   error: { color: 'text-red-600 bg-red-50', label: '异常' },
 };
@@ -154,7 +154,7 @@ export default function LiveTailView({ filter, agents: externalAgents }: LiveTai
             <span className="text-xs text-red-500">{error}</span>
             <button
               onClick={() => window.location.reload()}
-              className="text-xs px-3 py-1.5 bg-slate-100 hover:bg-slate-200 rounded-lg text-slate-600 transition-colors"
+              className="text-xs px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded-lg text-slate-400 transition-colors"
             >
               重试
             </button>
@@ -208,7 +208,7 @@ export default function LiveTailView({ filter, agents: externalAgents }: LiveTai
               return (
                 <div
                   key={agent.id}
-                  className="border border-slate-200 rounded-xl overflow-hidden bg-white"
+                  className="border border-slate-700 rounded-xl overflow-hidden bg-slate-800"
                 >
                   {/* Agent Row */}
                   <button
@@ -216,14 +216,14 @@ export default function LiveTailView({ filter, agents: externalAgents }: LiveTai
                       setExpandedAgent(isExpanded ? null : agent.id);
                       setSelectedAgent(agent);
                     }}
-                    className={`w-full flex items-center gap-3 p-3.5 hover:bg-slate-50 transition-colors text-left ${
-                      isExpanded ? 'bg-slate-50' : ''
+                    className={`w-full flex items-center gap-3 p-3.5 hover:bg-slate-800/50 transition-colors text-left ${
+                      isExpanded ? 'bg-slate-800/50' : ''
                     }`}
                   >
                     <AgentStatusDot status={agent.status} />
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2">
-                        <span className="text-xs font-medium text-slate-800">{agent.name}</span>
+                        <span className="text-xs font-medium text-slate-200">{agent.name}</span>
                         <span
                           className={`text-[10px] px-1.5 py-0.5 rounded-full ${config.color}`}
                         >
@@ -234,7 +234,7 @@ export default function LiveTailView({ filter, agents: externalAgents }: LiveTai
                         <div className="flex items-center gap-2 mt-0.5">
                           <span className="text-[10px] text-slate-400">{agent.taskId}</span>
                           <span className="text-[10px] text-slate-400">·</span>
-                          <span className="text-[10px] text-slate-500 truncate">
+                          <span className="text-[10px] text-slate-400 truncate">
                             {agent.taskName}
                           </span>
                         </div>
@@ -257,7 +257,7 @@ export default function LiveTailView({ filter, agents: externalAgents }: LiveTai
                       </span>
                     )}
                     <svg
-                      className={`w-3 h-3 text-slate-300 transition-transform flex-shrink-0 ${
+                      className={`w-3 h-3 text-slate-600 transition-transform flex-shrink-0 ${
                         isExpanded ? 'rotate-180' : ''
                       }`}
                       fill="none"
@@ -271,7 +271,7 @@ export default function LiveTailView({ filter, agents: externalAgents }: LiveTai
 
                   {/* Expanded Activity Timeline */}
                   {isExpanded && (
-                    <div className="border-t border-slate-100 px-4 pb-4 pt-3 bg-slate-50/50">
+                    <div className="border-t border-slate-800 px-4 pb-4 pt-3 bg-slate-800/50/50">
                       <AgentActivityTimeline activities={agent.lastActivity} />
                     </div>
                   )}
@@ -296,18 +296,18 @@ export default function LiveTailView({ filter, agents: externalAgents }: LiveTai
 
       {/* Agent Detail Panel */}
       {selectedAgent && (
-        <div className="w-80 bg-white rounded-xl border border-slate-200 flex-shrink-0 overflow-y-auto">
+        <div className="w-80 bg-slate-800 rounded-xl border border-slate-700 flex-shrink-0 overflow-y-auto">
           <div className="p-4">
             <div className="flex items-center justify-between mb-3">
               <div className="flex items-center gap-2">
                 <AgentStatusDot status={selectedAgent.status} />
-                <h3 className="text-sm font-semibold text-slate-800">
+                <h3 className="text-sm font-semibold text-slate-200">
                   {selectedAgent.name}
                 </h3>
               </div>
               <button
                 onClick={() => setSelectedAgent(null)}
-                className="p-1 hover:bg-slate-100 rounded-lg"
+                className="p-1 hover:bg-slate-700 rounded-lg"
               >
                 <svg
                   className="w-3.5 h-3.5 text-slate-400"
@@ -326,7 +326,7 @@ export default function LiveTailView({ filter, agents: externalAgents }: LiveTai
             </div>
 
             {selectedAgent.taskId && (
-              <div className="text-xs text-slate-500 mb-3">
+              <div className="text-xs text-slate-400 mb-3">
                 关联任务: {selectedAgent.taskId} ({selectedAgent.taskName})
               </div>
             )}
@@ -334,25 +334,25 @@ export default function LiveTailView({ filter, agents: externalAgents }: LiveTai
             {/* Stats */}
             {selectedAgent.toolCalls > 0 && (
               <div className="grid grid-cols-2 gap-2 mb-4">
-                <div className="bg-slate-50 rounded-lg p-2.5 text-center">
-                  <div className="text-lg font-bold text-slate-800">
+                <div className="bg-slate-800/50 rounded-lg p-2.5 text-center">
+                  <div className="text-lg font-bold text-slate-200">
                     {selectedAgent.toolCalls}
                   </div>
                   <div className="text-[10px] text-slate-400">工具调用</div>
                 </div>
-                <div className="bg-slate-50 rounded-lg p-2.5 text-center">
-                  <div className="text-lg font-bold text-slate-800">
+                <div className="bg-slate-800/50 rounded-lg p-2.5 text-center">
+                  <div className="text-lg font-bold text-slate-200">
                     {selectedAgent.toolSuccess}/{selectedAgent.toolCalls}
                   </div>
                   <div className="text-[10px] text-slate-400">成功率</div>
                 </div>
-                <div className="bg-slate-50 rounded-lg p-2.5 text-center">
+                <div className="bg-slate-800/50 rounded-lg p-2.5 text-center">
                   <div className="text-lg font-bold text-emerald-600">
                     +{selectedAgent.codeAdded}
                   </div>
                   <div className="text-[10px] text-slate-400">新增行</div>
                 </div>
-                <div className="bg-slate-50 rounded-lg p-2.5 text-center">
+                <div className="bg-slate-800/50 rounded-lg p-2.5 text-center">
                   <div className="text-lg font-bold text-red-500">
                     -{selectedAgent.codeRemoved}
                   </div>
@@ -369,10 +369,10 @@ export default function LiveTailView({ filter, agents: externalAgents }: LiveTai
               {anomalyRules.map((rule, i) => (
                 <div
                   key={i}
-                  className="flex items-center gap-2 text-[10px] py-1 px-2 rounded hover:bg-slate-50"
+                  className="flex items-center gap-2 text-[10px] py-1 px-2 rounded hover:bg-slate-800/50"
                 >
                   <span className="w-5 text-center">{rule.icon}</span>
-                  <span className="text-slate-600">{rule.type}</span>
+                  <span className="text-slate-400">{rule.type}</span>
                   <span className="text-slate-400 ml-auto">{rule.condition}</span>
                 </div>
               ))}
@@ -392,8 +392,8 @@ export default function LiveTailView({ filter, agents: externalAgents }: LiveTai
                     { label: '等待', pct: 5, color: 'bg-slate-300' },
                   ].map((d) => (
                     <div key={d.label} className="flex items-center gap-2 text-[10px]">
-                      <span className="text-slate-500 w-14">{d.label}</span>
-                      <div className="flex-1 h-1.5 bg-slate-100 rounded-full overflow-hidden">
+                      <span className="text-slate-400 w-14">{d.label}</span>
+                      <div className="flex-1 h-1.5 bg-slate-700 rounded-full overflow-hidden">
                         <div
                           className={`h-full rounded-full ${d.color}`}
                           style={{ width: `${d.pct}%` }}

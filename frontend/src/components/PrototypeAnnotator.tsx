@@ -136,13 +136,13 @@ export function PrototypeAnnotator({
   return (
     <div className="prototype-annotator space-y-4">
       {/* Toolbar */}
-      <div className="toolbar flex flex-wrap gap-2 p-3 bg-slate-100 rounded-lg">
+      <div className="toolbar flex flex-wrap gap-2 p-3 bg-slate-700 rounded-lg">
         <button
           onClick={() => setMode(mode === 'view' ? 'annotate' : 'view')}
           className={`px-3 py-2 rounded text-sm font-medium transition-colors ${
             mode === 'annotate'
               ? 'bg-emerald-500 text-white'
-              : 'bg-white text-slate-700 border border-slate-300'
+              : 'bg-slate-800 text-slate-600 border border-slate-300'
           }`}
         >
           {mode === 'view' ? '开始标注' : '查看模式'}
@@ -155,7 +155,7 @@ export function PrototypeAnnotator({
               onChange={(e) =>
                 setSelectedType(e.target.value as Annotation['type'])
               }
-              className="px-3 py-2 border border-slate-300 rounded text-sm bg-white"
+              className="px-3 py-2 border border-slate-300 rounded text-sm bg-slate-800"
             >
               <option value="component">组件</option>
               <option value="interaction">交互</option>
@@ -172,7 +172,7 @@ export function PrototypeAnnotator({
           </>
         )}
 
-        <div className="flex-1 text-right text-xs text-slate-600">
+        <div className="flex-1 text-right text-xs text-slate-400">
           标注数: {annotations.length}
         </div>
       </div>
@@ -186,7 +186,7 @@ export function PrototypeAnnotator({
             className={`relative bg-gray-50 rounded-lg overflow-hidden border-2 ${
               mode === 'annotate'
                 ? 'border-blue-300 cursor-crosshair'
-                : 'border-slate-200 cursor-default'
+                : 'border-slate-700 cursor-default'
             }`}
             style={{ minHeight: '600px' }}
           >
@@ -222,7 +222,7 @@ export function PrototypeAnnotator({
                   cursor: 'pointer',
                 }}
               >
-                <div className="text-xs font-medium text-blue-700 p-1 bg-white/90 whitespace-nowrap overflow-hidden text-ellipsis">
+                <div className="text-xs font-medium text-blue-700 p-1 bg-slate-800/90 whitespace-nowrap overflow-hidden text-ellipsis">
                   {ann.label}
                 </div>
               </div>
@@ -232,12 +232,12 @@ export function PrototypeAnnotator({
 
         {/* Properties Panel */}
         {selectedAnn && mode === 'annotate' && (
-          <div className="w-64 bg-white border border-slate-200 rounded-lg p-4 space-y-3">
-            <h3 className="font-semibold text-slate-900">标注属性</h3>
+          <div className="w-64 bg-slate-800 border border-slate-700 rounded-lg p-4 space-y-3">
+            <h3 className="font-semibold text-slate-100">标注属性</h3>
 
             {/* Label */}
             <div>
-              <label className="block text-xs font-medium text-slate-700 mb-1">
+              <label className="block text-xs font-medium text-slate-600 mb-1">
                 标签
               </label>
               <input
@@ -252,7 +252,7 @@ export function PrototypeAnnotator({
 
             {/* Type */}
             <div>
-              <label className="block text-xs font-medium text-slate-700 mb-1">
+              <label className="block text-xs font-medium text-slate-600 mb-1">
                 类型
               </label>
               <select
@@ -273,7 +273,7 @@ export function PrototypeAnnotator({
             {/* Position */}
             <div className="grid grid-cols-2 gap-2">
               <div>
-                <label className="block text-xs font-medium text-slate-700 mb-1">
+                <label className="block text-xs font-medium text-slate-600 mb-1">
                   X
                 </label>
                 <input
@@ -288,7 +288,7 @@ export function PrototypeAnnotator({
                 />
               </div>
               <div>
-                <label className="block text-xs font-medium text-slate-700 mb-1">
+                <label className="block text-xs font-medium text-slate-600 mb-1">
                   Y
                 </label>
                 <input
@@ -307,7 +307,7 @@ export function PrototypeAnnotator({
             {/* Size */}
             <div className="grid grid-cols-2 gap-2">
               <div>
-                <label className="block text-xs font-medium text-slate-700 mb-1">
+                <label className="block text-xs font-medium text-slate-600 mb-1">
                   宽
                 </label>
                 <input
@@ -322,7 +322,7 @@ export function PrototypeAnnotator({
                 />
               </div>
               <div>
-                <label className="block text-xs font-medium text-slate-700 mb-1">
+                <label className="block text-xs font-medium text-slate-600 mb-1">
                   高
                 </label>
                 <input

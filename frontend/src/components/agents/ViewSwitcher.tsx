@@ -15,15 +15,15 @@ const views: { key: ViewType; label: string }[] = [
 
 export default function ViewSwitcher({ activeView, onViewChange }: ViewSwitcherProps) {
   return (
-    <div className="flex bg-slate-100 rounded-lg p-0.5">
+    <div className="flex bg-slate-700 rounded-lg p-0.5">
       {views.map((v) => (
         <button
           key={v.key}
           onClick={() => onViewChange(v.key)}
           className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${
             activeView === v.key
-              ? 'bg-white text-slate-900 shadow-sm'
-              : 'text-slate-500'
+              ? 'bg-slate-800 text-slate-100 shadow-sm'
+              : 'text-slate-400'
           }`}
         >
           {v.label}

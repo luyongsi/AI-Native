@@ -9,13 +9,13 @@ interface DiffLineRowProps {
 const typeStyles: Record<string, string> = {
   add: 'bg-emerald-50 border-l-2 border-emerald-400',
   remove: 'bg-red-50 border-l-2 border-red-400',
-  context: 'bg-white',
+  context: 'bg-slate-800',
 };
 
 const prefixStyles: Record<string, string> = {
   add: 'text-emerald-600 font-medium',
   remove: 'text-red-500 font-medium',
-  context: 'text-slate-300',
+  context: 'text-slate-600',
 };
 
 export default function DiffLineRow({ line }: DiffLineRowProps) {
@@ -26,11 +26,11 @@ export default function DiffLineRow({ line }: DiffLineRowProps) {
   return (
     <div className={`flex text-xs leading-6 ${style}`}>
       {/* Old line number */}
-      <span className="w-10 text-right flex-shrink-0 select-none text-[10px] text-slate-300 pr-2">
+      <span className="w-10 text-right flex-shrink-0 select-none text-[10px] text-slate-600 pr-2">
         {line.oldLineNumber ?? ''}
       </span>
       {/* New line number */}
-      <span className="w-10 text-right flex-shrink-0 select-none text-[10px] text-slate-300 pr-2">
+      <span className="w-10 text-right flex-shrink-0 select-none text-[10px] text-slate-600 pr-2">
         {line.newLineNumber ?? ''}
       </span>
       {/* Prefix */}
@@ -39,7 +39,7 @@ export default function DiffLineRow({ line }: DiffLineRowProps) {
       </span>
       {/* Content */}
       <span className={`pl-1 font-mono whitespace-pre ${
-        line.type === 'add' ? 'text-emerald-800' : line.type === 'remove' ? 'text-red-800' : 'text-slate-700'
+        line.type === 'add' ? 'text-emerald-800' : line.type === 'remove' ? 'text-red-800' : 'text-slate-600'
       }`}>
         {line.content}
       </span>

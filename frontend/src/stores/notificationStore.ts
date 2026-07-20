@@ -1,57 +1,45 @@
 import { create } from 'zustand';
-import { api } from '@/lib/api';
 import type { Notification } from '@/lib/types';
 
 interface NotificationStore {
   notifications: Notification[];
   unreadCount: number;
+  isLoading: boolean;
+  /** 从 API 加载通知 */
+  loadNotifications: (apiFn: () => Promise<Notification[]>) => Promise<void>;
+  /** 标记单条已读 */
   markRead: (id: string) => void;
+  /** 全部标记已读 */
   markAllRead: () => void;
-  loadNotifications: () => Promise<void>;
-  setNotifications: (notifications: Notification[]) => void;
-  hydrate: (data: Notification[]) => void;
 }
 
-export const useNotificationStore = create<NotificationStore>((set) => ({
+export const useNotificationStore = create<NotificationStore>((set, get) => ({
   notifications: [],
   unreadCount: 0,
+  isLoading: false,
 
-  markRead: (id) =>
-    set((state) => ({
-      notifications: state.notifications.map((n) =>
-        n.id === id ? { ...n, read: true } : n
-      ),
-      unreadCount: Math.max(0, state.unreadCount - 1),
-    })),
-
-  markAllRead: () =>
-    set((state) => ({
-      notifications: state.notifications.map((n) => ({ ...n, read: true })),
-      unreadCount: 0,
-    })),
-
-  loadNotifications: async () => {
+  loadNotifications: async (apiFn) => {
+    set({ isLoading: true });
     try {
-      const data = await api.getNotifications();
-      const items: Notification[] = data.items || (data as unknown as Notification[]);
-      set({
-        notifications: items,
-        unreadCount: items.filter((n) => !n.read).length,
-      });
-    } catch {
-      // Silently fail — components can read the empty state to show a fallback
+      const items = await apiFn();
+      const unread = items.filter((n) => !n.read).length;
+      set({ notifications: items, unreadCount: unread, isLoading: false });
+    } catch (err) {
+      console.error('Failed to load notifications:', err);
+      set({ isLoading: false });
     }
   },
 
-  setNotifications: (notifications) =>
-    set({
-      notifications,
-      unreadCount: notifications.filter((n) => !n.read).length,
-    }),
+  markRead: (id) => {
+    const notifications = get().notifications.map((n) =>
+      n.id === id ? { ...n, read: true } : n
+    );
+    const unreadCount = notifications.filter((n) => !n.read).length;
+    set({ notifications, unreadCount });
+  },
 
-  hydrate: (data) =>
-    set({
-      notifications: data,
-      unreadCount: data.filter((n) => !n.read).length,
-    }),
+  markAllRead: () => {
+    const notifications = get().notifications.map((n) => ({ ...n, read: true }));
+    set({ notifications, unreadCount: 0 });
+  },
 }));

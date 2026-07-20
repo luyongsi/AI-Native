@@ -24,14 +24,14 @@ export default function ClarificationCard({ items, onSelect, disabled }: Clarifi
       </div>
       {items.map((item, i) => (
         <div key={i} className="bg-amber-50 border border-amber-100 rounded-xl p-3">
-          <p className="text-xs text-slate-700 font-medium mb-1">{item.question}</p>
+          <p className="text-xs text-slate-600 font-medium mb-1">{item.question}</p>
           {item.suggestion && (
             <div className="mt-2">
               <span className="text-[9px] text-slate-400">推荐方案:</span>
               <button
                 onClick={() => onSelect(item.suggestion)}
                 disabled={disabled}
-                className="mt-1 block w-full text-left text-[10px] px-3 py-2 bg-white border border-amber-200 rounded-lg text-amber-700 hover:border-amber-400 hover:bg-amber-50 transition-colors disabled:opacity-50"
+                className="mt-1 block w-full text-left text-[10px] px-3 py-2 bg-slate-800 border border-amber-200 rounded-lg text-amber-700 hover:border-amber-400 hover:bg-amber-50 transition-colors disabled:opacity-50"
               >
                 {item.suggestion}
               </button>
@@ -39,7 +39,7 @@ export default function ClarificationCard({ items, onSelect, disabled }: Clarifi
           )}
           {item.field && (
             <div className="mt-1.5">
-              <span className="text-[9px] text-slate-300">字段: {item.field}</span>
+              <span className="text-[9px] text-slate-600">字段: {item.field}</span>
             </div>
           )}
         </div>

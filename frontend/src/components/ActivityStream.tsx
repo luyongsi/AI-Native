@@ -15,11 +15,11 @@ interface ActivityStreamProps {
 
 const statusColors: Record<string, string> = {
   running: 'bg-emerald-50 border-emerald-200 text-emerald-700',
-  idle: 'bg-slate-50 border-slate-200 text-slate-700',
+  idle: 'bg-slate-800/50 border-slate-700 text-slate-600',
   waiting: 'bg-amber-50 border-amber-200 text-amber-700',
   error: 'bg-red-50 border-red-200 text-red-700',
   success: 'bg-emerald-50 border-emerald-200 text-emerald-700',
-  pending: 'bg-slate-50 border-slate-200 text-slate-700',
+  pending: 'bg-slate-800/50 border-slate-700 text-slate-600',
 };
 
 const eventTypeLabels: Record<string, string> = {
@@ -33,7 +33,7 @@ const eventTypeColors: Record<string, string> = {
   status: 'text-blue-600 bg-blue-50 border-blue-100',
   progress: 'text-emerald-600 bg-emerald-50 border-emerald-100',
   artifact: 'text-purple-600 bg-purple-50 border-purple-100',
-  message: 'text-slate-600 bg-slate-100 border-slate-200',
+  message: 'text-slate-400 bg-slate-700 border-slate-700',
 };
 
 function formatTime(timestamp: string): string {
@@ -62,7 +62,7 @@ function ConnectionIndicator({ status }: { status: ConnectionStatus }) {
     },
     [ConnectionStatus.Disconnected]: {
       label: '已断开',
-      color: 'text-slate-500',
+      color: 'text-slate-400',
       dot: 'bg-slate-400',
     },
     [ConnectionStatus.Error]: {
@@ -88,8 +88,8 @@ function ProgressBar({ percentage, label }: { percentage: number; label?: string
   return (
     <div className="space-y-1">
       <div className="flex items-center justify-between text-xs">
-        <span className="text-slate-600">{label || '进度'}</span>
-        <span className="text-slate-500 font-medium">{clampedPercentage}%</span>
+        <span className="text-slate-400">{label || '进度'}</span>
+        <span className="text-slate-400 font-medium">{clampedPercentage}%</span>
       </div>
       <div className="w-full h-1.5 bg-slate-200 rounded-full overflow-hidden">
         <div
@@ -103,18 +103,18 @@ function ProgressBar({ percentage, label }: { percentage: number; label?: string
 
 function ActivityCard({ activity }: { activity: Activity }) {
   return (
-    <div className="p-3 border border-slate-200 rounded-lg bg-white hover:shadow-sm transition-shadow">
+    <div className="p-3 border border-slate-700 rounded-lg bg-slate-800 hover:shadow-sm transition-shadow">
       {/* Header */}
       <div className="flex items-start justify-between gap-2 mb-2">
         <div className="flex items-center gap-2 flex-1 min-w-0">
           <span
             className={`text-xs font-medium px-2 py-1 rounded border flex-shrink-0 ${
-              eventTypeColors[activity.type] || 'text-slate-600 bg-slate-100 border-slate-200'
+              eventTypeColors[activity.type] || 'text-slate-400 bg-slate-700 border-slate-700'
             }`}
           >
             {eventTypeLabels[activity.type] || activity.type}
           </span>
-          <span className="text-xs font-semibold text-slate-900 truncate">
+          <span className="text-xs font-semibold text-slate-100 truncate">
             {activity.agentName || activity.agentId}
           </span>
         </div>
@@ -136,7 +136,7 @@ function ActivityCard({ activity }: { activity: Activity }) {
 
       {/* Message */}
       {activity.message && (
-        <p className="text-sm text-slate-700 mb-2 break-words">{activity.message}</p>
+        <p className="text-sm text-slate-600 mb-2 break-words">{activity.message}</p>
       )}
 
       {/* Progress */}
@@ -147,7 +147,7 @@ function ActivityCard({ activity }: { activity: Activity }) {
             label={activity.progress.step}
           />
           {activity.progress.current !== undefined && activity.progress.total !== undefined && (
-            <span className="text-xs text-slate-500">
+            <span className="text-xs text-slate-400">
               {activity.progress.current} / {activity.progress.total}
             </span>
           )}
@@ -156,15 +156,15 @@ function ActivityCard({ activity }: { activity: Activity }) {
 
       {/* Artifact */}
       {activity.artifact && (
-        <div className="bg-slate-50 border border-slate-200 rounded p-2 text-xs">
-          <div className="font-medium text-slate-700 mb-1">{activity.artifact.type}</div>
+        <div className="bg-slate-800/50 border border-slate-700 rounded p-2 text-xs">
+          <div className="font-medium text-slate-600 mb-1">{activity.artifact.type}</div>
           {activity.artifact.path && (
-            <div className="text-slate-600 mb-1 font-mono text-[10px] break-all">
+            <div className="text-slate-400 mb-1 font-mono text-[10px] break-all">
               {activity.artifact.path}
             </div>
           )}
           {activity.artifact.content && (
-            <div className="text-slate-600 max-h-24 overflow-y-auto font-mono text-[10px] whitespace-pre-wrap break-words">
+            <div className="text-slate-400 max-h-24 overflow-y-auto font-mono text-[10px] whitespace-pre-wrap break-words">
               {activity.artifact.content}
             </div>
           )}
@@ -173,11 +173,11 @@ function ActivityCard({ activity }: { activity: Activity }) {
 
       {/* Details */}
       {activity.details && Object.keys(activity.details).length > 0 && (
-        <div className="mt-2 text-xs text-slate-600 bg-slate-50 p-2 rounded border border-slate-200">
+        <div className="mt-2 text-xs text-slate-400 bg-slate-800/50 p-2 rounded border border-slate-700">
           {Object.entries(activity.details).map(([key, value]) => (
             <div key={key} className="flex gap-2">
-              <span className="font-medium text-slate-700 flex-shrink-0">{key}:</span>
-              <span className="text-slate-600 break-all">
+              <span className="font-medium text-slate-600 flex-shrink-0">{key}:</span>
+              <span className="text-slate-400 break-all">
                 {typeof value === 'object' ? JSON.stringify(value) : String(value)}
               </span>
             </div>
@@ -223,10 +223,10 @@ export default function ActivityStream({
   }, [activities, onActivityUpdate]);
 
   return (
-    <div className="flex flex-col h-full bg-white rounded-lg border border-slate-200">
+    <div className="flex flex-col h-full bg-slate-800 rounded-lg border border-slate-700">
       {/* Header */}
-      <div className="flex items-center justify-between p-4 border-b border-slate-200">
-        <h2 className="text-lg font-semibold text-slate-900">Agent 活动流</h2>
+      <div className="flex items-center justify-between p-4 border-b border-slate-700">
+        <h2 className="text-lg font-semibold text-slate-100">Agent 活动流</h2>
         <ConnectionIndicator status={isConnected} />
       </div>
 
@@ -249,7 +249,7 @@ export default function ActivityStream({
             <div className="text-center">
               <div className="text-sm mb-1">等待活动中...</div>
               {isConnected === ConnectionStatus.Connected && (
-                <div className="text-xs text-slate-500">连接已建立，等待事件...</div>
+                <div className="text-xs text-slate-400">连接已建立，等待事件...</div>
               )}
             </div>
           </div>
@@ -262,7 +262,7 @@ export default function ActivityStream({
 
       {/* Footer */}
       {lastUpdate && (
-        <div className="px-4 py-2 bg-slate-50 border-t border-slate-200 text-xs text-slate-500">
+        <div className="px-4 py-2 bg-slate-800/50 border-t border-slate-700 text-xs text-slate-400">
           最后更新: {formatTime(lastUpdate)}
         </div>
       )}

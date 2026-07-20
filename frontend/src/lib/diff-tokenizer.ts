@@ -32,7 +32,7 @@ const TOKEN_STYLES: Record<string, string> = {
   type: 'text-cyan-600',
   function: 'text-blue-600',
   number: 'text-emerald-600',
-  operator: 'text-slate-500',
+  operator: 'text-slate-400',
   plain: '',
 };
 

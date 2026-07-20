@@ -1,9 +1,10 @@
-// ============================================================
+﻿// ============================================================
 // Centralized API client
 // ============================================================
 
 import type {
   ApiListResponse,
+  RawAgentInfo,
   Requirement,
   AgentInfo,
   CodeDiff,
@@ -21,24 +22,28 @@ import type {
   KnowledgeStatus,
   ChatMessage,
   ChatResponse,
+  DialogueCycle,
+  DialogueEvent,
   SpecSection,
   TestCase,
   LLMCallItem,
   LLMCallDetail,
   LLMCallListResponse,
+  E2EEvent,
+  E2ERunResult,
 } from './types';
 
 const BASE_URL = process.env.NEXT_PUBLIC_API_URL || '';
 
-async function fetchApi<T>(path: string, options?: RequestInit): Promise<T> {
+async function fetchApi<T>(path: string, options?: RequestInit, baseOverride?: string): Promise<T> {
   let res: Response;
   try {
-    res = await fetch(`${BASE_URL}${path}`, {
+    res = await fetch(`${baseOverride || BASE_URL}${path}`, {
       headers: { 'Content-Type': 'application/json', ...options?.headers },
       ...options,
     });
   } catch (err) {
-    throw new Error(`网络错误: 无法连接到服务器 (${BASE_URL})`);
+    throw new Error(`缃戠粶閿欒: 鏃犳硶杩炴帴鍒版湇鍔″櫒 (${BASE_URL})`);
   }
 
   if (!res.ok) {
@@ -55,6 +60,34 @@ async function fetchApi<T>(path: string, options?: RequestInit): Promise<T> {
   return res.json();
 }
 
+// Backend→Frontend field mapping for agents
+interface BackendAgent {
+  id: string; agent_id: string; agent_type: string; req_id?: string;
+  task_id?: string | null; status: string; current_action?: string | null;
+  tool_calls_json?: Record<string, any>; code_added?: number; code_removed?: number;
+  anomaly?: string | null; session_id?: string | null; cost_usd?: number; created_at?: string;
+}
+function mapAgent(raw: BackendAgent): AgentInfo {
+  const toolCount = raw.tool_calls_json ? Object.keys(raw.tool_calls_json).length : 0;
+  return {
+    id: raw.id,
+    name: raw.agent_id,
+    type: raw.agent_type,
+    status: (raw.status as AgentInfo['status']) || 'idle',
+    taskId: raw.task_id || '',
+    taskName: raw.req_id || '',
+    runtime: raw.created_at || '',
+    toolCalls: toolCount,
+    toolSuccess: toolCount,
+    toolFailed: 0,
+    codeAdded: raw.code_added || 0,
+    codeRemoved: raw.code_removed || 0,
+    lastActivity: raw.current_action
+      ? [{ time: raw.created_at || '', type: 'think', content: raw.current_action, success: true }]
+      : [],
+    anomaly: raw.anomaly || undefined,
+  };
+}
 export const api = {
   // Dashboard
   getDashboardStats: () => fetchApi<DashboardStats>('/api/dashboard/stats'),
@@ -93,9 +126,9 @@ export const api = {
       body: JSON.stringify(data),
     }),
 
-  // ── Dialogue (A1 HTTP+SSE) ────────────────────────────────────────
+  // 鈹€鈹€ Dialogue (A1 HTTP+SSE) 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
   createDialogueRequirement: (title?: string) =>
-    fetchApi<{ req_id: string; status: string; title: string | null; created_at: string }>(
+    fetchApi<{ req_id: string; session_id?: string; status: string; title: string | null; created_at: string }>(
       '/api/requirements',
       {
         method: 'POST',
@@ -108,6 +141,8 @@ export const api = {
     message: string,
     sessionId: string | null,
     onEvent: (event: DialogueEvent) => void,
+    onComplete?: () => void,
+    onError?: (error: Error) => void,
   ): Promise<void> => {
     const BASE_URL = process.env.NEXT_PUBLIC_API_URL || '';
     return new Promise<void>((resolve, reject) => {
@@ -153,9 +188,9 @@ export const api = {
         }
       };
 
-      xhr.onerror = () => reject(new Error('网络错误'));
-      xhr.ontimeout = () => reject(new Error('请求超时'));
-      xhr.timeout = 300000; // 5 min timeout for SSE
+      xhr.onerror = () => reject(new Error('缃戠粶閿欒'));
+      xhr.ontimeout = () => reject(new Error('璇锋眰瓒呮椂'));
+      xhr.timeout = 300000;
 
       xhr.send(JSON.stringify({
         req_id: reqId,
@@ -197,14 +232,15 @@ export const api = {
     }>(`/api/dialogue/current/${reqId}`),
 
   // Agents
-  getAgents: (params?: { agent_type?: string; limit?: number }) => {
+  getAgents: async (params?: { agent_type?: string; limit?: number }) => {
     const qs = new URLSearchParams();
     if (params?.agent_type) qs.set('agent_type', params.agent_type);
     if (params?.limit) qs.set('limit', String(params.limit));
     const query = qs.toString();
-    return fetchApi<ApiListResponse<AgentInfo>>(
+    const raw = await fetchApi<ApiListResponse<BackendAgent>>(
       `/api/agents${query ? `?${query}` : ''}`
     );
+    return { items: raw.items.map(mapAgent), total: raw.total, limit: raw.limit, offset: raw.offset };
   },
 
   getAgentDiffs: (agentId: string) =>
@@ -239,21 +275,21 @@ export const api = {
       body: JSON.stringify(data),
     }),
 
-  // Deprecated — use decideApproval(id, {decision: 'pass'}) instead
+  // Deprecate -...use decideApproval(id, {decision: 'pass'}) instead
   approve: (id: string) =>
     fetchApi<any>(`/api/approvals/${id}/decide`, {
       method: 'POST',
       body: JSON.stringify({ decision: 'pass' }),
     }),
 
-  // Deprecated — MC Backend /api/approvals POST is for internal NATS subscriber use
+  // Deprecated ...MC Backend /api/approvals POST is for internal NATS subscriber use
   submitApproval: (reqId: string, gate?: number) =>
     fetchApi<any>('/api/approvals', {
       method: 'POST',
       body: JSON.stringify({ req_id: reqId, gate_level: gate || 0, cycle: 0, session_id: '' }),
     }),
 
-  // Deprecated — use decideApproval(id, {decision: 'reject', ...}) instead
+  // Deprecated ...use decideApproval(id, {decision: 'reject', ...}) instead
   reject: (id: string, reason?: string) =>
     fetchApi<any>(`/api/approvals/${id}/decide`, {
       method: 'POST',
@@ -289,7 +325,10 @@ export const api = {
   },
 
   // Knowledge
-  getKnowledge: () => fetchApi<KnowledgeStatus>('/api/knowledge'),
+  getKnowledge: async () => {
+    try { return await fetchApi<KnowledgeStatus>('/api/knowledge'); }
+    catch { return { projects: [], apiStats: { indexed: 0, deprecated: 0, undocumented: 0, conflicts: 0 } }; }
+  },
 
   // Chat + Spec
   getChatMessages: (reqId: string) =>
@@ -352,8 +391,8 @@ export const api = {
         }
       };
 
-      xhr.onerror = () => reject(new Error('网络错误'));
-      xhr.ontimeout = () => reject(new Error('请求超时'));
+      xhr.onerror = () => reject(new Error('缃戠粶閿欒'));
+      xhr.ontimeout = () => reject(new Error('璇锋眰瓒呮椂'));
       xhr.timeout = 180000;  // 3 min timeout
 
       xhr.send(JSON.stringify({ message, mode }));
@@ -391,7 +430,7 @@ export const api = {
     }),
 
   // LLM Calls
-  getLLMCalls: (params?: {
+  getLLMCalls: async (params?: {
     agent_id?: string;
     req_id?: string;
     task_type?: string;
@@ -412,6 +451,58 @@ export const api = {
     );
   },
 
+
+  // E2E Pipeline Tests (testing-tool port 8500)
+  e2e: {
+    run: (title: string, message: string) => {
+      const E2E_BASE = process.env.NEXT_PUBLIC_TESTING_TOOL_URL || 'http://localhost:8500';
+      return fetchApi<{ ok: boolean; run_id: string }>(
+        '/api/tests/e2e/run',
+        { method: 'POST', body: JSON.stringify({ title, message }) },
+        E2E_BASE
+      );
+    },
+    results: (runId: string) => {
+      const E2E_BASE = process.env.NEXT_PUBLIC_TESTING_TOOL_URL || 'http://localhost:8500';
+      return fetchApi('/api/tests/e2e/results/' + runId, {}, E2E_BASE);
+    },
+    history: (limit = 20) => {
+      const E2E_BASE = process.env.NEXT_PUBLIC_TESTING_TOOL_URL || 'http://localhost:8500';
+      return fetchApi<{ items: E2ERunResult[] }>('/api/tests/e2e/history?limit=' + limit, {}, E2E_BASE);
+    },
+    stream: (runId: string, eventHandler: (event: E2EEvent) => void): Promise<void> => {
+      const E2E_BASE = process.env.NEXT_PUBLIC_TESTING_TOOL_URL || 'http://localhost:8500';
+      return new Promise<void>((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open("GET", E2E_BASE + "/api/tests/e2e/stream/" + runId);
+        xhr.setRequestHeader("Accept", "text/event-stream");
+        xhr.timeout = 600000;
+        let lastPos = 0;
+        xhr.onprogress = () => {
+          const newText = xhr.responseText.substring(lastPos);
+          lastPos = xhr.responseText.length;
+          const lines = newText.split("\n");
+          for (let i = 0; i < lines.length; i++) {
+            if (lines[i].startsWith("event: ")) {
+              const type = lines[i].slice(7).trim();
+              const next = lines[i + 1];
+              if (next && next.startsWith("data: ")) {
+                try {
+                  const data = JSON.parse(next.slice(6).trim());
+                  eventHandler({ type, data } as E2EEvent);
+                } catch {}
+              }
+            }
+          }
+        };
+        xhr.onload = () => xhr.status < 300 ? resolve() : reject(new Error(String(xhr.status)));
+        xhr.onerror = () => reject(new Error("Connection failed"));
+        xhr.ontimeout = () => reject(new Error("Timeout"));
+        xhr.send();
+      });
+    },
+  },
   getLLMCall: (callId: string) =>
     fetchApi<LLMCallDetail>(`/api/llm-calls/${callId}`),
 };
+

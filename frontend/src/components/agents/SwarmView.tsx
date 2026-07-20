@@ -86,7 +86,7 @@ export default function SwarmView({
               {/* Group header */}
               <div className="flex items-center gap-2 mb-1.5 px-1">
                 <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${groupDots[group.status]}`} />
-                <span className="text-[10px] font-medium text-slate-500">{group.label}</span>
+                <span className="text-[10px] font-medium text-slate-400">{group.label}</span>
                 <span className="text-[9px] text-slate-400">{group.count}</span>
               </div>
               {/* Cards */}

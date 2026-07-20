@@ -63,9 +63,9 @@ export function CodePreview({ reqId }: CodePreviewProps) {
   };
 
   return (
-    <div className="code-preview space-y-3 rounded-lg border border-slate-200 bg-white p-4">
+    <div className="code-preview space-y-3 rounded-lg border border-slate-700 bg-slate-800 p-4">
       <div className="flex items-center justify-between">
-        <h3 className="font-semibold text-slate-900">生成的代码（实时更新）</h3>
+        <h3 className="font-semibold text-slate-100">生成的代码（实时更新）</h3>
         {isLoading && (
           <span className="inline-flex items-center gap-2 text-xs text-amber-600">
             <span className="animate-pulse">●</span>
@@ -89,7 +89,7 @@ export function CodePreview({ reqId }: CodePreviewProps) {
             >
               下载
             </button>
-            <span className="ml-auto text-xs text-slate-500">
+            <span className="ml-auto text-xs text-slate-400">
               {codeType}
             </span>
           </div>

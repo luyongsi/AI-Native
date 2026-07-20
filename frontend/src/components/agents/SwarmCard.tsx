@@ -14,7 +14,7 @@ const priorityC: Record<string, string> = {
   P0: 'text-red-600 bg-red-50',
   P1: 'text-amber-600 bg-amber-50',
   P2: 'text-blue-600 bg-blue-50',
-  P3: 'text-slate-500 bg-slate-100',
+  P3: 'text-slate-400 bg-slate-700',
 };
 
 function getAgentsForReq(req: Requirement, agents: AgentInfo[]): AgentInfo[] {
@@ -39,8 +39,8 @@ export default function SwarmCard({ requirement, agents, isSelected, onClick }: 
       onClick={onClick}
       className={`w-full text-left px-2.5 py-2 rounded-lg border transition-all ${
         isSelected
-          ? 'border-slate-900 ring-1 ring-slate-900/10 bg-slate-50'
-          : 'border-slate-100 bg-white hover:border-slate-200 hover:bg-slate-50/50'
+          ? 'border-slate-900 ring-1 ring-slate-900/10 bg-slate-800/50'
+          : 'border-slate-800 bg-slate-800 hover:border-slate-700 hover:bg-slate-800/50/50'
       }`}
     >
       {/* Row 1: priority + ID + title */}
@@ -49,7 +49,7 @@ export default function SwarmCard({ requirement, agents, isSelected, onClick }: 
           {requirement.priority}
         </span>
         <span className="text-[10px] font-mono text-slate-400 flex-shrink-0">{requirement.id}</span>
-        <span className="text-[11px] font-medium text-slate-800 truncate">{requirement.title}</span>
+        <span className="text-[11px] font-medium text-slate-200 truncate">{requirement.title}</span>
       </div>
 
       {/* Row 2: agent dots + stats + progress */}
@@ -80,7 +80,7 @@ export default function SwarmCard({ requirement, agents, isSelected, onClick }: 
         <div className="flex-1" />
         {aiPct > 0 && (
           <div className="flex items-center gap-1 flex-shrink-0">
-            <div className="w-8 h-1 bg-slate-100 rounded-full overflow-hidden">
+            <div className="w-8 h-1 bg-slate-700 rounded-full overflow-hidden">
               <div className="h-full bg-emerald-500 rounded-full" style={{ width: `${aiPct}%` }} />
             </div>
             <span className="text-[9px] text-emerald-600 font-medium w-7 text-right">{aiPct}%</span>
