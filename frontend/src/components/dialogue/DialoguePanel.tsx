@@ -33,66 +33,119 @@ export default function DialoguePanel({
   // 初始化 session
   useEffect(() => {
     if (initialized) return;
-    if (store.reqId === reqId && store.sessionId) {
+
+    // 使用 getState() 读取最新 store 状态，避免把 store 放入 deps
+    // 否则每次 store 更新都会重新触发 effect，导致并发初始化竞态
+    const currentState = useDialogueStore.getState();
+    // 仅当消息已加载才跳过初始化，否则即使 sessionId 已设置也需加载历史
+    if (currentState.reqId === reqId && currentState.sessionId && currentState.messages.length > 0) {
       setInitialized(true);
       return;
     }
+
+    let cancelled = false;
 
     const init = async () => {
       try {
         if (initialSessionId) {
           // 已有 session，加载历史
           const history = await api.getDialogueHistory(initialSessionId);
+          if (cancelled) return;
           store.setHistory(history.cycles);
-          setInitialized(true);
+          // 同步最新的 draft / wireframe 到 store，刷新右侧面板
+          if (history.current_draft) {
+            useDialogueStore.setState({ draft: history.current_draft });
+          }
+          if (history.current_wireframe) {
+            useDialogueStore.setState({ wireframe: history.current_wireframe });
+          }
         } else {
-          // 创建新 session
+          // 检查是否存在 session
           const current = await api.getDialogueCurrent(reqId);
+          if (cancelled) return;
           if (current.session_id) {
             store.setSession(reqId, current.session_id, current.status || "active", current.cycle || 0);
+            // 同时加载历史消息
+            const history = await api.getDialogueHistory(current.session_id);
+            if (cancelled) return;
+            store.setHistory(history.cycles);
+            if (history.current_draft) {
+              useDialogueStore.setState({ draft: history.current_draft });
+            }
+            if (history.current_wireframe) {
+              useDialogueStore.setState({ wireframe: history.current_wireframe });
+            }
           }
-          setInitialized(true);
         }
       } catch {
-        setInitialized(true);
+        // silent
+      } finally {
+        if (!cancelled) setInitialized(true);
       }
     };
     init();
-  }, [reqId, initialSessionId, initialized, store]);
+
+    return () => { cancelled = true; };
+  }, [reqId, initialSessionId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // 自动滚动
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [localMessages, store.thinkingText]);
 
-  // 从 store 历史加载消息
+  // 从 store 历史加载消息 — 后端用 human/ai，前端用 user/assistant
   useEffect(() => {
     if (store.messages.length > 0 && localMessages.length === 0) {
-      const msgs = store.messages.map((m) => ({
-        role: m.role as "user" | "assistant",
-        content:
-          typeof m.content === "string"
-            ? m.content
-            : m.content?.text || (m.content?.clarifications ? JSON.stringify(m.content.clarifications) : JSON.stringify(m.content)),
-        timestamp: m.timestamp ? new Date(m.timestamp).toLocaleTimeString("zh-CN") : undefined,
-      }));
+      const msgs = store.messages.map((m) => {
+        // 角色映射：backend (human/ai/system) → frontend (user/assistant/system)
+        const roleMap: Record<string, "user" | "assistant"> = {
+          human: "user",
+          ai: "assistant",
+        };
+        const displayRole = roleMap[m.role] || m.role;
+        // 内容提取：优先 text，其次 draft_preview 摘要，再次 clarifications
+        let displayContent = "";
+        if (typeof m.content === "string") {
+          displayContent = m.content;
+        } else if (m.content?.text) {
+          displayContent = m.content.text;
+        } else if (m.content?.draft_preview?.title) {
+          displayContent = `已更新需求草稿：「${m.content.draft_preview.title}」`;
+        } else if (m.content?.clarifications) {
+          displayContent = (m.content.clarifications as Array<{question: string}>)
+            .map((c) => c.question).join("\n");
+        } else {
+          displayContent = JSON.stringify(m.content);
+        }
+        return {
+          role: displayRole as "user" | "assistant",
+          content: displayContent,
+          timestamp: m.timestamp ? new Date(m.timestamp).toLocaleTimeString("zh-CN") : undefined,
+        };
+      });
       setLocalMessages(msgs);
     }
   }, [store.messages]);
 
-  // 转发 draft 更新
-  useEffect(() => {
-    if (store.draft && onDraftUpdate) {
-      onDraftUpdate(store.draft);
-    }
-  }, [store.draft, onDraftUpdate]);
+  // 转发 draft 更新 — 不依赖 onDraftUpdate 引用避免重渲染循环
+  const onDraftUpdateRef = useRef(onDraftUpdate);
+  onDraftUpdateRef.current = onDraftUpdate;
 
-  // 转发 wireframe 更新
   useEffect(() => {
-    if (store.wireframe && onWireframeUpdate) {
-      onWireframeUpdate(store.wireframe);
+    if (store.draft && onDraftUpdateRef.current) {
+      onDraftUpdateRef.current(store.draft);
     }
-  }, [store.wireframe, onWireframeUpdate]);
+  }, [store.draft]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // 转发 wireframe 更新 — 不依赖 onWireframeUpdate 引用避免重渲染循环
+  const onWireframeUpdateRef = useRef(onWireframeUpdate);
+  onWireframeUpdateRef.current = onWireframeUpdate;
+
+  useEffect(() => {
+    if (store.wireframe && onWireframeUpdateRef.current) {
+      onWireframeUpdateRef.current(store.wireframe);
+    }
+  }, [store.wireframe]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // done 事件后添加 assistant 消息
   useEffect(() => {
@@ -116,7 +169,6 @@ export default function DialoguePanel({
   const handleSend = useCallback(
     (content: string) => {
       const sid = store.sessionId || initialSessionId;
-      if (!sid) return;
 
       setLocalMessages((prev) => [
         ...prev,
@@ -124,18 +176,25 @@ export default function DialoguePanel({
       ]);
       store.startStreaming();
 
+      // session_id=null is fine — backend auto-creates session on first message
       api.sendDialogueMessage(
-        sid,
+        reqId,
         content,
-        null,
-        (event) => store.handleEvent(event),
+        sid || null,
+        (event) => {
+          store.handleEvent(event);
+          // Capture session_id from done event if backend created it
+          if (event.type === 'done' && (event as any).session_id) {
+            useDialogueStore.setState({ sessionId: (event as any).session_id, reqId });
+          }
+        },
         () => {},
         (error) => {
-          store.stopStreaming(sid, error instanceof Error ? error.message : "SSE 连接失败");
+          store.stopStreaming(sid || reqId, error instanceof Error ? error.message : "SSE 连接失败");
         }
       );
     },
-    [store, initialSessionId]
+    [store, initialSessionId, reqId]
   );
 
   const handleConfirm = useCallback(async () => {

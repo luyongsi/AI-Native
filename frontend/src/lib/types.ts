@@ -133,11 +133,16 @@ export interface Gate0Approval {
   decision?: 'pass' | 'reject';
   reject_reasons?: RejectReason[];
   revision_guidance?: string;
+  a3_rework?: boolean;
+  a6_rework?: boolean;
+  a7_rework?: boolean;
   reviewer_user_id?: string;
   reviewer_name?: string;
   reviewed_at?: string;
   created_at?: string;
   gate_meta?: { label: string; icon: string; description: string };
+  // Gate2 specific context
+  gate2_context?: Gate2Context;
 }
 
 export interface RejectReason {
@@ -192,6 +197,52 @@ export interface DecideRequest {
   decision: 'pass' | 'reject';
   reject_reasons?: RejectReason[];
   revision_guidance?: string;
+  a3_rework?: boolean;
+  a6_rework?: boolean;
+  a7_rework?: boolean;
+}
+
+// Gate2 specific context — matches GET /api/gate2/{req_id}/context response
+export interface Gate2Context {
+  req_id: string;
+  cycle: number;
+  requirement_info: {
+    title: string;
+    phase?: string;
+    tech_prep_status?: string;
+    tech_prep_revision_count?: number;
+  };
+  a6_output: {
+    dag: any;
+    dag_detail?: {
+      task_dags_id?: number;
+      version: number;
+      dag_json: any;
+      node_count?: number;
+      critical_path_length?: number;
+      total_estimated_hours?: number;
+      human_review_nodes?: number;
+      source?: string;
+    } | null;
+    validation?: any;
+    a6_missing: boolean;
+  };
+  a7_output: {
+    test_plan: any;
+    test_assets: any;
+    dag_coverage?: any;
+    a7_missing: boolean;
+  };
+  a8_output: {
+    review: any;
+    violations: any[];
+    checks?: any;
+    score: number;
+    verdict: string;
+    suggestions: any[];
+    summary: string;
+    a8_missing: boolean;
+  };
 }
 
 // --- Notification ---

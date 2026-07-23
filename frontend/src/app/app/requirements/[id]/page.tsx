@@ -143,10 +143,12 @@ export default function RequirementDetailPage() {
             sessionId={dialogueStore.sessionId || undefined}
             variant="embedded"
             onDraftUpdate={(draft: RequirementDraft) => {
+              // Auto-switch to draft tab when draft content arrives
               setActiveView("draft");
             }}
             onWireframeUpdate={(wireframe: WireframeData) => {
-              setActiveView("wireframe");
+              // Don't auto-switch so the user can freely explore all tabs.
+              // The wireframe tab is available but won't steal focus.
             }}
           />
         }

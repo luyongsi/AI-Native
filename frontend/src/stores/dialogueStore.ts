@@ -140,11 +140,13 @@ export const useDialogueStore = create<DialogueState>((set, get) => ({
       isStreaming: false,
     }),
 
-  setHistory: (cycles) =>
-    set({
+  setHistory: (cycles) => {
+    const messages = cycles.flatMap((c: DialogueCycle) => c.messages);
+    return set({
       cycles,
-      messages: cycles.flatMap((c) => c.messages),
-    }),
+      messages,
+    });
+  },
 
   setCurrentInfo: (info) =>
     set({

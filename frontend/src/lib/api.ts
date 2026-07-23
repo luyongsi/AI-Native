@@ -4,7 +4,6 @@
 
 import type {
   ApiListResponse,
-  RawAgentInfo,
   Requirement,
   AgentInfo,
   CodeDiff,
@@ -12,6 +11,7 @@ import type {
   Gate0Approval,
   ApprovalContext,
   DecideRequest,
+  Gate2Context,
   Alert,
   Notification,
   TopologyNode,
@@ -68,11 +68,12 @@ interface BackendAgent {
   anomaly?: string | null; session_id?: string | null; cost_usd?: number; created_at?: string;
 }
 function mapAgent(raw: BackendAgent): AgentInfo {
+  if (!raw) return { id: '', name: '', type: '', status: 'idle', taskId: '', taskName: '', runtime: '', toolCalls: 0, toolSuccess: 0, toolFailed: 0, codeAdded: 0, codeRemoved: 0, lastActivity: [] };
   const toolCount = raw.tool_calls_json ? Object.keys(raw.tool_calls_json).length : 0;
   return {
-    id: raw.id,
-    name: raw.agent_id,
-    type: raw.agent_type,
+    id: raw.id || '',
+    name: raw.agent_id || '',
+    type: raw.agent_type || '',
     status: (raw.status as AgentInfo['status']) || 'idle',
     taskId: raw.task_id || '',
     taskName: raw.req_id || '',
@@ -88,11 +89,35 @@ function mapAgent(raw: BackendAgent): AgentInfo {
     anomaly: raw.anomaly || undefined,
   };
 }
+
+// Requirement field mapping (backend snake_case → frontend camelCase)
+function mapRequirement(raw: any): Requirement {
+  if (!raw) return {} as Requirement;
+  return {
+    id: raw.id || '',
+    title: raw.title || '',
+    description: (raw.requirement_draft && raw.requirement_draft.description) || raw.description || '',
+    status: raw.status || 'draft',
+    priority: 'P2',
+    version: '1.0',
+    pm: raw.creator_name || '',
+    assignees: [],
+    aiCompletion: 0,
+    humanInterventions: raw.gate_rejection_count || 0,
+    blocked: false,
+    createdAt: raw.created_at || '',
+    created_at: raw.created_at,
+    updated_at: raw.updated_at,
+    stages: [],
+    relatedIds: [],
+    stage: raw.status || 'pool',
+  };
+}
 export const api = {
   // Dashboard
   getDashboardStats: () => fetchApi<DashboardStats>('/api/dashboard/stats'),
 
-  // Requirements
+  // Requirements (with snake_case→camelCase mapping)
   getRequirements: (params?: {
     status?: string;
     priority?: string;
@@ -105,15 +130,15 @@ export const api = {
     if (params?.limit) qs.set('limit', String(params.limit));
     if (params?.offset) qs.set('offset', String(params.offset));
     const query = qs.toString();
-    return fetchApi<ApiListResponse<Requirement>>(
+    return fetchApi<ApiListResponse<any>>(
       `/api/requirements${query ? `?${query}` : ''}`
-    );
+    ).then(raw => ({ ...raw, items: raw.items.map(mapRequirement) }));
   },
 
   getRequirement: (id: string) =>
-    fetchApi<Requirement & { approvals: any[]; activities: any[] }>(
+    fetchApi<any>(
       `/api/requirements/${id}`
-    ),
+    ).then(mapRequirement) as Promise<Requirement & { approvals: any[]; activities: any[] }>,
 
   createRequirement: (data: {
     title: string;
@@ -151,36 +176,44 @@ export const api = {
       xhr.setRequestHeader('Content-Type', 'application/json');
 
       let lastProcessedPos = 0;
-      // Track accumulated draft across stream
-      let accumulatedDraft: any = null;
+
+      // Shared SSE parsing: processes raw text lines and dispatches typed events
+      const processSSELines = (lines: string[]) => {
+        let currentEventType = '';
+        for (const line of lines) {
+          if (line === '' || line === '\r') {
+            currentEventType = '';
+            continue;
+          }
+          if (line.startsWith('event: ')) {
+            currentEventType = line.slice(7).trim();
+          } else if (line.startsWith('data: ')) {
+            const dataStr = line.slice(6).trim();
+            if (!dataStr) continue;
+            try {
+              const payload = JSON.parse(dataStr);
+              // Event type comes from the SSE `event:` line (backend uses _format_sse which strips type from payload)
+              const eventType = currentEventType || payload.type;
+              const event = { type: eventType, ...payload };
+              onEvent(event as DialogueEvent);
+            } catch {}
+            currentEventType = '';
+          }
+        }
+      };
 
       xhr.onprogress = () => {
         const newText = xhr.responseText.substring(lastProcessedPos);
         lastProcessedPos = xhr.responseText.length;
-
-        const lines = newText.split('\n');
-        for (const line of lines) {
-          if (!line.startsWith('data: ')) continue;
-          const dataStr = line.slice(6).trim();
-          if (!dataStr) continue;
-          try {
-            const event = JSON.parse(dataStr);
-            // 'draft_update' events carry full draft in event.draft
-            if (event.draft && !event.type) {
-              // Inline draft from draft_update event
-              accumulatedDraft = event.draft;
-              onEvent({ type: 'draft_update', draft: event.draft });
-            } else if (event.type) {
-              if (event.type === 'draft_update') {
-                accumulatedDraft = event.draft;
-              }
-              onEvent(event as DialogueEvent);
-            }
-          } catch {}
-        }
+        processSSELines(newText.split('\n'));
       };
 
       xhr.onload = () => {
+        // Process any remaining data that may not have fired onprogress
+        const newText = xhr.responseText.substring(lastProcessedPos);
+        if (newText) {
+          processSSELines(newText.split('\n'));
+        }
         if (xhr.status >= 200 && xhr.status < 300) {
           resolve();
         } else {
@@ -189,7 +222,7 @@ export const api = {
       };
 
       xhr.onerror = () => reject(new Error('缃戠粶閿欒'));
-      xhr.ontimeout = () => reject(new Error('璇锋眰瓒呮椂'));
+      xhr.ontimeout = () => reject(new Error('请求超时'));
       xhr.timeout = 300000;
 
       xhr.send(JSON.stringify({
@@ -218,6 +251,8 @@ export const api = {
       session_id: string;
       req_id: string;
       cycles: DialogueCycle[];
+      current_draft?: any;
+      current_wireframe?: any;
     }>(`/api/dialogue/history/${sessionId}`),
 
   getDialogueCurrent: (reqId: string) =>
@@ -268,6 +303,10 @@ export const api = {
 
   getApprovalContext: (id: string) =>
     fetchApi<ApprovalContext>(`/api/approvals/${id}/context`),
+
+  // Gate2 specialized context (aggregated A6+A7+A8 data)
+  getGate2Context: (reqId: string) =>
+    fetchApi<Gate2Context>(`/api/gate2/${reqId}/context`),
 
   decideApproval: (id: string, data: DecideRequest) =>
     fetchApi<Gate0Approval>(`/api/approvals/${id}/decide`, {
@@ -326,7 +365,15 @@ export const api = {
 
   // Knowledge
   getKnowledge: async () => {
-    try { return await fetchApi<KnowledgeStatus>('/api/knowledge'); }
+    try {
+      const raw: any = await fetchApi<any>('/api/knowledge');
+      // Backend returns api_stats (snake_case), map to apiStats (camelCase)
+      return {
+        projects: raw.projects || [],
+        apiStats: raw.api_stats || raw.apiStats || { indexed: 0, deprecated: 0, undocumented: 0, conflicts: 0 },
+        todos: raw.todos || [],
+      } as KnowledgeStatus;
+    }
     catch { return { projects: [], apiStats: { indexed: 0, deprecated: 0, undocumented: 0, conflicts: 0 } }; }
   },
 
@@ -392,7 +439,7 @@ export const api = {
       };
 
       xhr.onerror = () => reject(new Error('缃戠粶閿欒'));
-      xhr.ontimeout = () => reject(new Error('璇锋眰瓒呮椂'));
+      xhr.ontimeout = () => reject(new Error('请求超时'));
       xhr.timeout = 180000;  // 3 min timeout
 
       xhr.send(JSON.stringify({ message, mode }));

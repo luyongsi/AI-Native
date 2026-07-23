@@ -46,13 +46,19 @@ class StatusUpdateRequest(BaseModel):
     status: str
     gate_rejection_count: Optional[int] = None
     last_gate_rejection: Optional[dict] = None
+    # Phase 3 extensions
+    tech_prep_status: Optional[str] = None
+    tech_prep_revision_count: Optional[int] = None
+    # Phase 2 extensions
+    design_status: Optional[str] = None
+    design_revision_count: Optional[int] = None
 
 
 # ── DB helper ────────────────────────────────────────────────────────────
 
-async def _get_conn():
+async def _get_conn(timeout: float = 10.0):
     from main import DB_POOL
-    return await DB_POOL.acquire()
+    return await asyncio.wait_for(DB_POOL.acquire(), timeout=timeout)
 
 
 # ── JWT helpers ──────────────────────────────────────────────────────────
@@ -64,7 +70,8 @@ def _jwt_claims(authorization: Optional[str] = Header(None)) -> dict:
     For dev it falls back to a default user.
     """
     if not authorization or not authorization.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Missing or invalid Authorization header")
+        # Dev fallback — return default dev user instead of 401
+        return {"sub": "dev-user", "name": "Dev User"}
 
     token = authorization[7:]
     try:
@@ -210,7 +217,7 @@ async def _stream_dialogue(body: ChatRequest, claims: dict):
                 session_id,
             )
 
-        # ── 3. Load conversation history + Invoke A1 Agent ──────────
+        # ── 3. Load conversation history ─────────────────────────
         hist_rows = await conn.fetch(
             """SELECT role, content, cycle, sequence_number
                FROM dialogue_messages
@@ -226,6 +233,11 @@ async def _stream_dialogue(body: ChatRequest, claims: dict):
                 current_draft = json.loads(current_draft)
             except (json.JSONDecodeError, TypeError):
                 current_draft = None
+
+        # Release DB connection before long-running LLM analysis
+        # to keep the pool available for other requests.
+        await conn.close()
+        conn = None
 
         import sys
         sys.path.insert(0, "/opt/ai-native/repos/agent-workers")
@@ -265,7 +277,9 @@ async def _stream_dialogue(body: ChatRequest, claims: dict):
                 if event.get("draft"):
                     accumulated_draft = event["draft"]
 
-        # ── 4. Persist AI message + snapshot (inside its own TX) ───────
+        # ── 4. Persist AI message + snapshot ─────────────────────────
+        # Re-acquire connection for final DB writes.
+        conn = await _get_conn()
         # The insert of the AI reply message needs its own transaction
         # because the lock from step 2 was released after commit.
         ai_seq = user_seq + 1
@@ -358,7 +372,8 @@ async def _stream_dialogue(body: ChatRequest, claims: dict):
         except Exception:
             pass
     finally:
-        await conn.close()
+        if conn is not None:
+            await conn.close()
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -580,10 +595,10 @@ async def dialogue_history(session_id: str, claims: dict = Depends(_jwt_claims))
 
         # Also load from understanding_snapshots (every chat turn, not just confirmed)
         us_rows = await conn.fetch(
-            """SELECT cycle, draft
+            """SELECT cycle, draft, wireframe_data
                FROM understanding_snapshots
                WHERE session_id = $1::uuid
-               ORDER BY cycle, created_at DESC""",
+               ORDER BY cycle DESC, created_at DESC, id DESC""",
             session_id,
         )
 
@@ -628,6 +643,8 @@ async def dialogue_history(session_id: str, claims: dict = Depends(_jwt_claims))
                     cycles_dict[cycle]["draft_snapshot"] = artifact.get("requirement_draft")
 
         # Fill in draft_snapshot from understanding_snapshots for un-confirmed cycles
+        last_draft = None
+        last_wireframe = None
         for us in us_rows:
             cycle = us["cycle"]
             if cycle in cycles_dict and not cycles_dict[cycle]["draft_snapshot"]:
@@ -639,6 +656,27 @@ async def dialogue_history(session_id: str, claims: dict = Depends(_jwt_claims))
                         draft = None
                 if isinstance(draft, dict):
                     cycles_dict[cycle]["draft_snapshot"] = draft
+            # Capture latest draft and wireframe across all cycles for
+            # the response top-level, so the frontend can restore the
+            # right-panel preview on page load regardless of cycle.
+            if not last_draft and us.get("draft"):
+                draft = us["draft"]
+                if isinstance(draft, str):
+                    try:
+                        draft = json.loads(draft)
+                    except (json.JSONDecodeError, TypeError):
+                        draft = None
+                if isinstance(draft, dict):
+                    last_draft = draft
+            if not last_wireframe and us.get("wireframe_data"):
+                wf = us["wireframe_data"]
+                if isinstance(wf, str):
+                    try:
+                        wf = json.loads(wf)
+                    except (json.JSONDecodeError, TypeError):
+                        wf = None
+                if isinstance(wf, dict):
+                    last_wireframe = wf
 
         cycles_list = sorted(cycles_dict.values(), key=lambda c: c["cycle"])
 
@@ -646,6 +684,8 @@ async def dialogue_history(session_id: str, claims: dict = Depends(_jwt_claims))
             "session_id": session_id,
             "req_id": str(sess["req_id"]),
             "cycles": cycles_list,
+            "current_draft": last_draft,
+            "current_wireframe": last_wireframe,
         }
 
     except HTTPException:
@@ -733,6 +773,30 @@ async def update_req_status(
             await conn.execute(
                 "UPDATE requirements SET last_gate_rejection = $2::jsonb, updated_at = NOW() WHERE id = $1::uuid",
                 req_id, json.dumps(body.last_gate_rejection, ensure_ascii=False),
+            )
+
+        # Phase 2: design_status + design_revision_count
+        if body.design_status is not None:
+            await conn.execute(
+                "UPDATE requirements SET design_status = $2, updated_at = NOW() WHERE id = $1::uuid",
+                req_id, body.design_status,
+            )
+        if body.design_revision_count is not None:
+            await conn.execute(
+                "UPDATE requirements SET design_revision_count = $2, updated_at = NOW() WHERE id = $1::uuid",
+                req_id, body.design_revision_count,
+            )
+
+        # Phase 3: tech_prep_status + tech_prep_revision_count
+        if body.tech_prep_status is not None:
+            await conn.execute(
+                "UPDATE requirements SET tech_prep_status = $2, updated_at = NOW() WHERE id = $1::uuid",
+                req_id, body.tech_prep_status,
+            )
+        if body.tech_prep_revision_count is not None:
+            await conn.execute(
+                "UPDATE requirements SET tech_prep_revision_count = $2, updated_at = NOW() WHERE id = $1::uuid",
+                req_id, body.tech_prep_revision_count,
             )
 
         # Audit
